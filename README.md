@@ -1,6 +1,6 @@
 
 node-substation
----------------
+===============
 A realtime application gateway and authentication provider for [Node.js](https://nodejs.org/) and
 [MongoDB](https://www.mongodb.org/).
  * manages sessions and cookies transparently
@@ -11,7 +11,7 @@ A realtime application gateway and authentication provider for [Node.js](https:/
 
 
 Getting Started
-===============
+---------------
 ```bash
 npm install substation
 ```
@@ -57,7 +57,7 @@ substation.listen (function (err) {
 
 
 Actions
-=======
+-------
 Actions are similar to the routes in other frameworks, except they are accessible over [Socket.io]
 (http://socket.io/) and automatically select whether to apply a template or just send JSON. If you
 use the [Browserify-enabled](http://browserify.org/) client library to perform an Action you need
@@ -159,7 +159,7 @@ substation.action (
 
 
 Authentication
-==============
+--------------
 `substation` features an uncommon dual-layer authentication scheme, intended to accomodate
 origin-specific policies by default. Each unique user ID owns any number of unique client IDs,
 representing the individual devices used to access your application. You *must* have a User *and* a
@@ -184,7 +184,7 @@ function login (station, agent, request, reply) {
 
 
 Events
-======
+------
 Emitting an event on a client device is very easy, even if they haven't used an Action recently. You
 may target events to all active connections of a user ID or user/client ID pair.
 
@@ -233,7 +233,7 @@ substation.on ('clientOffline', function (userID) {
 
 
 WebRTC
-======
+------
 WebRTC connections are made semi-automatically. The request is initialized by the client machine and
 produces an event on the server. Listeners on this event may allow the connection to proceed, after
 which remaining SDP and ICE exchange phases are automatic.
