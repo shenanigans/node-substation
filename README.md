@@ -56,6 +56,108 @@ substation.listen (function (err) {
 ```
 
 
+Actions
+=======
+Actions are similar to the routes in other frameworks, except they are accessible over [Socket.io]
+(http://socket.io/) and automatically select whether to apply a template or just send JSON. If you
+use the [Browserify-enabled](http://browserify.org/) client library to perform an Action you need
+never know what transport was used.
+
+```javascript
+var home = substation.getServer();
+console.log ('using http');
+home.goLive (function (err) {
+    console.log ('switched to socket.io');
+});
+home.action (
+    'PUT',
+    '/posts/12345',
+    { title:postTitle, content:postBody },
+    function (err, status, body) {
+        console.log ('action complete');
+    }
+);
+```
+
+On the server side, an Action is defined by a handful of configuration options and a reaction
+function.
+```javascript
+// templates are expected to be callables
+// EITHER template (contextObj)
+// OR template (contextObj, callback (err, html))
+var template_201 = handlebars
+    .compile (
+        fs.readFileSync (201_filename)
+         .toString()
+    );
+var template_406 = handlebars
+    .compile (
+        fs.readFileSync (406_filename)
+         .toString()
+    );
+var template_409 = handlebars
+    .compile (
+        fs.readFileSync (409_filename)
+         .toString()
+    );
+
+// validators are expected to be callables
+// EITHER validate (document)
+// OR validate (document, callback (err))
+var PostSchema = new likeness.Validator ({
+    title:      {
+        '.type':    'string',
+        // require >= one word char
+        '.match':   /\w/,
+        '.max':     128
+    },
+    content:    {
+        '.type':    'string',
+        // require >= one word char
+        '.match':   /\w/,
+        '.max':     20480
+    }
+});
+
+var NewPost = new substation.Action ({
+    authentication: {
+        isLoggedIn:     true
+    },
+    template:       {
+        201:            template_201,
+        406:            template_406,
+        409:            template_409
+    },
+    bodySchema:     PostSchema
+}, function (station, agent, request, reply) {
+
+    // save the post
+    // ...
+
+    // events are emitted from the client's
+    // `substation` Object
+    reply.event ('newPost', {
+        user:   agent.user,
+        postID: request.params[0]
+    });
+
+    // content is reported as `body` to the
+    // client's request callback
+    reply.content ({ total:postCount });
+
+    // when html is expected,
+    // this call selects the template
+    reply.done (201);
+});
+
+substation.action (
+    'PUT',
+    /\/post\/(\d+)/,
+    NewPost
+);
+```
+
+
 Authentication
 ==============
 `substation` features an uncommon dual-layer authentication scheme, intended to accomodate
