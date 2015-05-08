@@ -15,6 +15,7 @@
   "dependencies": {
     "async": "^0.9.0",
     "browserify": "^9.0.3",
+    "bunyan": "^1.3.5",
     "busboy": "^0.2.9",
     "cachew": "^0.1.0",
     "cookies": "^0.5.0",

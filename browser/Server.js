@@ -3,11 +3,34 @@ var http = require ('http-browserify');
 var buffer = require ('buffer');
 var url = require ('url');
 var socketio = require ('socket.io-client');
-var Alice = require ('./Alice');
-var Bob = require ('./Bob');
+var Peer = require ('./Peer');
 var inherit = require ('./inherit');
 var EventEmitter = require ('events').EventEmitter;
 
+function cookies(){
+    this.keys = {};
+    if (!window.document.cookie)
+        return;
+    var cfrags = window.document.cookie.split (';');
+    for (var i=0,j=cfrags.length; i<j; i++) {
+        var frags = cfrags[i].split ('=');
+        this.keys[decodeURIComponent (frags[0])] = frags[1];
+    }
+}
+cookies.prototype.get = function (key) {
+    if (Object.hasOwnProperty.call (this.keys, key))
+        return this.keys[key];
+};
+
+var WebRTC_ICE = [
+    { url:'stun:stun.l.google.com:19302' },
+    { url:'stun:stun1.l.google.com:19302' },
+    { url:'stun:stun2.l.google.com:19302' },
+    { url:'stun:stun3.l.google.com:19302' },
+    { url:'stun:stun4.l.google.com:19302' },
+    { url:'stun:stun.ucsb.edu:3478' },
+    { url:'stun:stun.services.mozilla.com:3478' }
+];
 
 /**     @class substation.Server
     @root
@@ -22,12 +45,11 @@ var EventEmitter = require ('events').EventEmitter;
     @default `3000`
 @member/Object[Function] actionCallbacks
 */
-function Server (station, host) {
+function Server (station, host, options) {
     EventEmitter.call (this);
-
+    options = options || {};
     this.station = station;
     this.host = host;
-
     this.live = false;
     this.peers = [];
     this.peerIDs = {};
@@ -36,8 +58,32 @@ function Server (station, host) {
     this.nextActionID = 1;
     this.actionCallbacks = {};
     this.actionTimeout = 3000;
+
+    // domestic host?
+    if (this.host.hostname == window.location.hostname) {
+        this.isDomestic = true;
+        var snickerdoodles = new cookies();
+        this.domestic = snickerdoodles.get ('domestic'); // may be undefined
+    }
+
+    // ICE Server configuration
+    this.iceServers = [];
+    this.iceServers.push.apply (this.iceServers, WebRTC_ICE);
+    if (options.iceServers)
+        this.iceServers = options.iceServers
+    else
+        options.iceServers = WebRTC_ICE;
 }
 inherit (Server, EventEmitter);
+
+
+/**     @member/Function updateOptions
+
+*/
+Server.prototype.updateOptions = function (options) {
+    if (options.iceServers)
+        this.iceServers = options.iceServers;
+};
 
 
 /**     @member/Function goLive
@@ -54,7 +100,12 @@ Server.prototype.goLive = function (callback) {
     }
     this.live = true;
 
-    this.liveSocket = socketio (this.host.origin);
+    if (this.isDomestic && (this.domestic || (this.domestic = (new cookies()).get ('domestic'))))
+        this.liveSocket = socketio (this.host.origin, {
+            query: '_domestic='+this.domestic
+        });
+    else
+        this.liveSocket = socketio (this.host.origin);
 
     var self = this;
     this.liveSocket.on ('connect', function(){
@@ -75,29 +126,31 @@ Server.prototype.goLive = function (callback) {
         });
 
         self.liveSocket.on ('event', function (info) {
-            self.station.sendEvents (self, [ info ]);
+            self.station.sendEvents ([ info ]);
         });
 
         self.liveSocket.on ('peer', function (info) {
-            if (info._id && Object.hasOwnProperty.call (self.peerIDs, String (info._id))) {
-                // matching peer
-                if (info.token)
-                    self.peerTokens[info.token] = peer;
-                self.peerIDs[info._id].processPeerMessage (info);
-                return;
-            }
             if (info.token && Object.hasOwnProperty.call (self.peerTokens, info.token)) {
                 self.peerTokens[info.token].processPeerMessage (info);
                 return;
             }
 
-            if (!info.init)
-                return; // caught an echo intended for a sibling connection
+            if (info.query)
+                for (var i=0,j=self.peers.length; i<j; i++)
+                    if (deepEqual (info.query, self.peers[i].query)) {
+                        self.peers[i].processPeerMessage (info);
+                        return;
+                    }
 
             // a new peer is connecting to us!
-            var peer = new Bob (self, info.peer, info.token, info.sdp, info.ICE);
-            self.peers.push (peer);
-            self.peerTokens[info.token] = peer;
+            try {
+                var peer = new Peer (self, info.query, info);
+                self.peers.push (peer);
+                if (info.token)
+                    self.peerTokens[info.token] = peer;
+            } catch (err) {
+                console.log ('critical peer error', err.stack);
+            }
         });
 
         self.emit ('live', true);
@@ -121,18 +174,6 @@ Server.prototype.goLive = function (callback) {
 }
 
 
-/**     @member/Function getPeer
-
-@argument/Object credentials
-    To request a peer connection, you must pass a "credential document" to a handler on the server.
-    This document is used to select the peer, and the handler makes the ultimate decision on whether
-    the connection is allowed to proceed.
-
-    WebRTC and the `Peer` class are **not** suitable for large numbers of connections.
-@callback
-    @argument/Error|undefined err
-    @argument/substation.Peer connectedPeer
-*/
 function deepEqual (first, second) {
     if (first === second) return true;
     var type = Object.typeStr (first);
@@ -145,16 +186,27 @@ function deepEqual (first, second) {
     }
     return first == second;
 }
-Server.prototype.getPeer = function (credentials, callback) {
-    var peer;
 
+
+/**     @member/Function getPeer
+
+@argument/Object query
+    To request a peer connection, you must pass a "credential document" to a handler on the server.
+    This document is used to select the peer, and the handler makes the ultimate decision on whether
+    the connection is allowed to proceed.
+@callback
+    @argument/Error|undefined err
+    @argument/substation.Peer connectedPeer
+*/
+Server.prototype.getPeer = function (query, callback) {
+    var peer;
     if (this.peers) for (var i=0,j=this.peers.length; i<j; i++)
-        if (deepEqual (this.peers[i].credentials, credentials)) {
+        if (deepEqual (this.peers[i].query, query)) {
             peer = this.peers[i];
             break;
         }
     if (!peer) {
-        peer = new Alice (this, credentials);
+        peer = new Peer (this, query);
         this.peers.push (peer);
     }
 
@@ -377,9 +429,8 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
             callback = arguments[4];
     }
 
-
+    // can we make a live transaction?
     if (this.liveSocketReady) {
-        // make a live transaction
         var action = {
             method:     method || 'GET',
             path:       path
@@ -416,6 +467,13 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
     // make a REST transaction
     if (this.domestic)
         (query || (query = {}))._domestic = this.domestic;
+    else if (this.isDomestic) {
+        // domestic connection that wasn't logged in when we last checked
+        // is it logged in now?
+        var snickerdoodles = new cookies();
+        if (this.domestic = snickerdoodles.get ('domestic'))
+            (query || (query = {}))._domestic = this.domestic;
+    }
     var fullpath = path;
     if (query) {
         var querystr;
@@ -505,14 +563,8 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
 /**     @member/Function connectPeer
 
 */
-Server.prototype.connectPeer = function (credentials, offer, peer) {
-    var peerTransactionID = this.nextActionID++;
-    this.peerIDs[peerTransactionID] = peer;
-    this.liveSocket.emit ('peer', {
-        _id:    peerTransactionID,
-        peer:   credentials,
-        sdp:    offer
-    });
+Server.prototype.connectPeer = function (query) {
+    this.liveSocket.emit ('link', query);
 };
 
 

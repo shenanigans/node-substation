@@ -16,12 +16,16 @@ var core = new EventEmitter();
 @returns/substation.Server server
 */
 var servers = {};
-function getServer (path) {
+function getServer (path, options) {
     var host = path ? url.parse (path) : window.location;
     if (!host) throw new Error ('invalid url');
-    if (Object.hasOwnProperty.call (servers, host))
-        return servers[host];
-    return servers[host] = new Server (core, host);
+    if (Object.hasOwnProperty.call (servers, host)) {
+        var server = servers[host];
+        if (options)
+            server.updateOptions (options);
+        return server;
+    }
+    return servers[host] = new Server (core, host, options);
 }
 core.getServer = getServer;
 

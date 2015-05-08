@@ -1,20 +1,30 @@
 
 node-substation
 ===============
-A realtime application gateway and authentication provider for [Node.js](https://nodejs.org/) and
-[MongoDB](https://www.mongodb.org/).
- * manages sessions and cookies transparently
- * exposes robust XSS protection by default
+**Warning** This library is still in the early development stage. It is not ready for public
+testing.
+
+A realtime application gateway, session manager, event router and WebRTC signalling server for
+[Node.js](https://nodejs.org/) and [MongoDB](https://www.mongodb.org/).
+ * scalable deployment out of the box
+ * manages database-backed sessions and browser cookies transparently
+ * provides robust XSS-attack protection
  * obfuscates [Socket.io](http://socket.io/) over your REST api
- * routes events to live-connected users anywhere on the cluster
+ * passively routes best-effort events to users connected over Socket.io
  * automates WebRTC connections between authenticated users
 
 
 Getting Started
 ---------------
+`substation` runs on [Node.js](https://nodejs.org/) and installs with [npm](https://www.npmjs.com/).
+It is configured and launched from a parent script and does not have a CLI tool. A simple, robust
+way to keep your server running is to launch it with
+[forever](https://github.com/foreverjs/forever).
 ```bash
 npm install substation
 ```
+
+The entry point for a simple application might look like this:
 ```javascript
 var substation = require ('substation');
 var config = require ('./config');
@@ -55,6 +65,19 @@ substation.listen (function (err) {
 });
 ```
 
+The default connection options for MongoDB are typically appropriate already, as it is common to run
+a `mongos` process on each application host instance. Therefor, the configuration file might be as
+simple as this (or simpler, if pre-forking is not desired):
+```json
+{
+    "databaseName": "MyApp",
+    "cluster":      true
+}
+```
+
+To get a handle on what `substation.action (...` does and what `./src/message/POST.js` might look
+like, read on to the next section.
+
 
 Actions
 -------
@@ -62,7 +85,6 @@ Actions are similar to the routes in other frameworks, except they are accessibl
 (http://socket.io/) and automatically select whether to apply a template or just send JSON. If you
 use the [Browserify-enabled](http://browserify.org/) client library to perform an Action you need
 never know what transport was used.
-
 ```javascript
 var home = substation.getServer();
 console.log ('using http');
@@ -170,7 +192,6 @@ When connecting to a Steam account from a "new computer" the email-validation st
 using a short alphanumeric code. `substation` has no opinion about how Clients should be validated,
 whether new Clients need to be confirmed, etc. You are only required to generate a Client ID to log
 in as, and ask `substation` to declare the user "active".
-
 ```javascript
 var LoginAction = new substation.Action (login);
 function login (station, agent, request, reply) {
@@ -178,7 +199,27 @@ function login (station, agent, request, reply) {
     // authenticate the user somehow
     // ...
 
+    // the Boolean argument is rememberMe
+    // it controls the browser cookie retention time
     agent.setActive (userID, clientID, true, callback);
+}
+```
+
+The primary purpose of this system is localization: if a user does something on your site from their
+phone, it might be helpful to target later events directly to their phone, even if their desktop at
+home was left open to the same page.
+
+In addition to being a logged in (or not) a user may also be domestic (or not) indicating that their
+viewing context has same-origin permissions for the domain. On the client this is fully transparent:
+every action that can be domestic will be. On the server, a property is set on the Agent.
+```javascript
+function PostAction (station, agent, request, reply) {
+    if (agent.isDomestic) {
+        // user has same-origin access to the domain
+    } else {
+        // viewed in an insecure context
+        // for example: an iframe
+    }
 }
 ```
 
@@ -205,7 +246,8 @@ function login (station, agent, request, reply) {
 ```
 
 Events are emitted by `substation` whenever the first or last connection for a User or Client ID
-goes on or off line.
+goes on or off line. These events only occur one time, on one server in the cluster, for each time
+the user or client changes state.
 ```javascript
 substation.on ('userOnline', function (userID) {
 
@@ -269,12 +311,48 @@ substation.on (
         connect (
             friend.userID,
             friend.clientID,
+            // identify the user to the client
             { email:agent.info.email },
             function (err, sent) {
-                // if a message was sent out
+                // if a message went out
                 // `sent` will be `true`
             }
         );
     }
 );
 ```
+
+Peer connections initialize with just a DataChannel to pass events. Multimedia is handled afterward.
+This is specifically because the server links the initiating peer to every receiving peer instance
+matching a user ID or user/client ID pair.
+
+Multimedia streams leaving the initiaing peer blind must be multiplexed to every matched peer
+instance. If you use this method, the receiving peer should usually pause new streams as they
+arrive. You may also create a single stream by sending the stream from a receiving peer instance
+*first*. The initiator can then reply with an outgoing stream targetting the connection that
+delivered the first stream.
+
+
+LICENSE
+-------
+The MIT License (MIT)
+
+Copyright (c) 2015 Kevin "Schmidty" Smith
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
