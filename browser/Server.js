@@ -34,7 +34,15 @@ var WebRTC_ICE = [
 
 /**     @class substation.Server
     @root
-
+    @super events.EventEmitter
+    Represents a remote `substation` web domain service, expected to respond to remote URLs sharing
+    a common hostname. Connections are manually upgraded to Socket.io with [#goLive]() or by
+    requesting a [Peer connection](substation.Peer).
+@argument/substation station
+    Globals are bad so the parent `substation` instance is passed in.
+@argument/url host
+    A `window.location` or `url.parse` of a URL belonging to the remote service.
+@argument/.Options options
 @member/substation station
 @member/url host
 @member/Boolean live
@@ -77,6 +85,13 @@ function Server (station, host, options) {
 inherit (Server, EventEmitter);
 
 
+/**     @property/class Options
+@member/Array[Object] iceServers
+    A [list of ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCConfiguration) that
+    will fully override the default list.
+*/
+
+
 /**     @member/Function updateOptions
 
 */
@@ -117,10 +132,11 @@ Server.prototype.goLive = function (callback) {
         }
 
         self.liveSocket.on ('reply', function (pack) {
+            console.log ('reply', pack);
             if (pack.events)
                 self.station.sendEvents (pack.events);
             if (pack._id && Object.hasOwnProperty.call (self.actionCallbacks, pack._id)) {
-                self.actionCallbacks[pack._id] (undefined, pack.status, pack.body || {});
+                self.actionCallbacks[pack._id] (undefined, pack.status, pack.content || {});
                 delete self.actionCallbacks[pack._id];
             }
         });
@@ -377,7 +393,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
             path = arguments[0];
             break;
         case 2:
-            // ( path, callback)
+            // ( path, callback )
             // ( method, path )
             // ( path, query )
             var lastType = typeof arguments[1];
@@ -402,6 +418,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
                 callback = arguments[2];
             } else {
                 method = arguments[0];
+                path = arguments[1];
                 if (typeof arguments[2] == 'function')
                     callback = arguments[2];
                 else
@@ -474,7 +491,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
         if (this.domestic = snickerdoodles.get ('domestic'))
             (query || (query = {}))._domestic = this.domestic;
     }
-    var fullpath = path;
+    var fullpath = path[0] == '/' ? path : '/' + path;
     if (query) {
         var querystr;
         var keys = Object.keys (query);

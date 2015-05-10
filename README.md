@@ -4,18 +4,39 @@ node-substation
 **Warning** This library is still in the early development stage. It is not ready for public
 testing.
 
-A realtime application gateway, session manager, event router and WebRTC signalling server for
+A realtime application gateway, session manager, event router and WebRTC signaling server for
 [Node.js](https://nodejs.org/) and [MongoDB](https://www.mongodb.org/).
  * scalable deployment out of the box
- * manages database-backed sessions and browser cookies transparently
+ * manages database-backed sessions and browser cookies
  * provides robust XSS-attack protection
  * obfuscates [Socket.io](http://socket.io/) over your REST api
+ * validates requests with JSON Schema
+ * exposes your api and schema with automatic OPTIONS support
  * passively routes best-effort events to users connected over Socket.io
  * automates WebRTC connections between authenticated users
+
+The state of the art in realtime, and particularly in peer to peer, is that even with the best shims
+easy jobs never are. "Room"-based libraries make lovely tutorials and demos but the leap from these
+barely-functional user experiences to a usable, scalable social application is too complex for
+anyone but the top competitive voip companies to manage.
+
+The goal of `substation` is to bridge that gap by reversing signal flow. A user logged in to your
+application no longer has to ask to be reachable, they are reachable by identity as soon as their
+Socket.io connection becomes active. Connection multiplicity is embraced, shipping events to groups
+of related useragents (usually multiple tabs) and creating robust WebRTC peer "Links" that join and
+rejoin as long as both peers remain connected at least once.
+
+Whether your application is a game server, a social application, a collaborative editing tool, a
+telecom device or something totally novel to Planet Earth, `substation` aims to support your
+signaling requirements, at scale, right out of the box.
 
 
 Getting Started
 ---------------
+A MongoDB cluster is required for storing session and live connection metadata. You are under no
+obligation to use MongoDB for any of your application data or otherwise use it for any other
+purpose.
+
 `substation` runs on [Node.js](https://nodejs.org/) and installs with [npm](https://www.npmjs.com/).
 It is configured and launched from a parent script and does not have a CLI tool. A simple, robust
 way to keep your server running is to launch it with
@@ -24,7 +45,7 @@ way to keep your server running is to launch it with
 npm install substation
 ```
 
-The entry point for a simple application might look like this:
+The entry point for a simple application might look something like this:
 ```javascript
 var substation = require ('substation');
 var config = require ('./config');
@@ -37,7 +58,7 @@ var otherServer = substation (config);
 myServer.action (
     "GET",
     new RegExp ("/msg/(\\d+)"),
-    require ('./src/message/get')
+    require ('./src/message/GET')
 );
 
 // activate a server
@@ -65,16 +86,6 @@ substation.listen (function (err) {
 });
 ```
 
-The default connection options for MongoDB are typically appropriate already, as it is common to run
-a `mongos` process on each application host instance. Therefor, the configuration file might be as
-simple as this (or simpler, if pre-forking is not desired):
-```json
-{
-    "databaseName": "MyApp",
-    "cluster":      true
-}
-```
-
 To get a handle on what `substation.action (...` does and what `./src/message/POST.js` might look
 like, read on to the next section.
 
@@ -99,6 +110,10 @@ home.action (
         console.log ('action complete');
     }
 );
+
+// logs "using http"
+// order of last two logging statements
+// is not defined
 ```
 
 On the server side, an Action is defined by a handful of configuration options and a reaction
@@ -107,40 +122,33 @@ function.
 // templates are expected to be callables
 // EITHER template (contextObj)
 // OR template (contextObj, callback (err, html))
-var template_201 = handlebars
-    .compile (
-        fs.readFileSync (201_filename)
-         .toString()
-    );
-var template_406 = handlebars
-    .compile (
-        fs.readFileSync (406_filename)
-         .toString()
-    );
-var template_409 = handlebars
-    .compile (
-        fs.readFileSync (409_filename)
-         .toString()
-    );
+var template_201 = handlebars.compile (
+    fs.readFileSync (201_filename).toString()
+);
+var template_406 = handlebars.compile (
+    fs.readFileSync (406_filename).toString()
+);
+var template_409 = handlebars.compile (
+    fs.readFileSync (409_filename).toString()
+);
 
-// validators are expected to be callables
-// EITHER validate (document)
-// OR validate (document, callback (err))
-var PostSchema = new likeness.Validator ({
-    title:      {
-        '.type':    'string',
-        // require >= one word char
-        '.match':   /\w/,
-        '.max':     128
-    },
-    content:    {
-        '.type':    'string',
-        // require >= one word char
-        '.match':   /\w/,
-        '.max':     20480
+var PostSchema = {
+    properties: {
+        title:      {
+            type:       "string",
+            match:      "\\w",
+            maxLength:  128
+        },
+        content:    {
+            type:       "string",
+            match:      "\\w",
+            maxLength:  20480
+        }
     }
 });
 
+// create an Action instance
+var substation = require ('substation');
 var NewPost = new substation.Action ({
     authentication: {
         isLoggedIn:     true
@@ -158,20 +166,25 @@ var NewPost = new substation.Action ({
 
     // events are emitted from the client's
     // `substation` Object
-    reply.event ('newPost', {
-        user:   agent.user,
-        postID: request.params[0]
-    });
+    reply.event (
+        'newPost',
+        agent.user,
+        request.params[0]
+    );
 
     // content is reported as `body` to the
     // client's request callback
-    reply.content ({ total:postCount });
+    reply.content ({
+        accepted:   true,
+        totalPosts: postCount
+    });
 
-    // when html is expected,
-    // this call selects the template
+    // close the Action
+    // and select a template
     reply.done (201);
 });
 
+// expose the action on the monolith
 substation.action (
     'PUT',
     /\/post\/(\d+)/,
@@ -200,7 +213,7 @@ function login (station, agent, request, reply) {
     // ...
 
     // the Boolean argument is rememberMe
-    // it controls the browser cookie retention time
+    // it controls browser cookie retention
     agent.setActive (userID, clientID, true, callback);
 }
 ```
@@ -218,7 +231,7 @@ function PostAction (station, agent, request, reply) {
         // user has same-origin access to the domain
     } else {
         // viewed in an insecure context
-        // for example: an iframe
+        // such as an iframe
     }
 }
 ```
@@ -278,7 +291,18 @@ WebRTC
 ------
 WebRTC connections are made semi-automatically. The request is initialized by the client machine and
 produces an event on the server. Listeners on this event may allow the connection to proceed, after
-which remaining SDP and ICE exchange phases are automatic.
+which remaining SDP and ICE exchange phases are automatic. The "Link" created between two Users or
+Clients will remain active for as long as at least one connection *to the server* remains active
+from each peer. As long as the Link is active, newly active connections (e.g. the user opens a new
+tab) will automatically join the Link by creating WebRTC connections and DataChannels to every other
+remote peer.
+
+Multimedia stream handling has been massively streamlined, with renegotiation of the underlying
+connection handled automatically. Streams can be added to or removed from a peer connection at any
+time without disruption. Multimedia streams will be duplicated to every connected Peer on the Link,
+so multimedia applications should consider selecting Peers by Client and disabling streams when not
+in use. Remember that if no Elements on the page refer to the stream no packets will be sent,
+however calling `pause()` is not sufficient.
 
 On the client:
 ```javascript
@@ -305,7 +329,7 @@ substation.on (
     'peerRequest',
     function (agent, info, connect) {
 
-        // find the user and authenticate
+        // find the "friend" User and authenticate
         // ...
 
         connect (
@@ -321,16 +345,6 @@ substation.on (
     }
 );
 ```
-
-Peer connections initialize with just a DataChannel to pass events. Multimedia is handled afterward.
-This is specifically because the server links the initiating peer to every receiving peer instance
-matching a user ID or user/client ID pair.
-
-Multimedia streams leaving the initiaing peer blind must be multiplexed to every matched peer
-instance. If you use this method, the receiving peer should usually pause new streams as they
-arrive. You may also create a single stream by sending the stream from a receiving peer instance
-*first*. The initiator can then reply with an outgoing stream targetting the connection that
-delivered the first stream.
 
 
 LICENSE
