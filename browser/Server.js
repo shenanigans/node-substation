@@ -75,12 +75,10 @@ function Server (station, host, options) {
     }
 
     // ICE Server configuration
-    this.iceServers = [];
-    this.iceServers.push.apply (this.iceServers, WebRTC_ICE);
     if (options.iceServers)
         this.iceServers = options.iceServers
     else
-        options.iceServers = WebRTC_ICE;
+        this.iceServers = WebRTC_ICE.slice();
 }
 inherit (Server, EventEmitter);
 

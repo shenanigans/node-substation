@@ -18,56 +18,14 @@ var Action       = require ('./lib/Action');
     @default `"127.0.0.1"`
 @member/Number databasePort
     @default `27017`
-@member/.Authentication.Configuration
-@member/.Backplane.Configuration
-*/
-/**     @struct substation.Authentication.Configuration
-    Options for authenticating users and keeping them authentic (or not).
-@member/Number clusterPort
-    @default `9012`
-    When worker processes are spawned, this port is used to pass auth requests to the master
-    process to optimize cache performance. Automatically disabled if [cacheSessions]
-    (substation.Configuration.cacheSessions) is `0` or `false`.
-@member/Number|Boolean cacheSessions
-    Maximum number of sessions to cache in memory, or Boolean false to disable. Setting to `0` also
-    disables the cache.
-@member/String sessionsCollectionName
-    @default `"Sessions"`
-    Name of the MongoDB collection used to store session records. Ignored when using
-    `SessionsCollection`.
-@member/mongodb.Collection|undefined SessionsCollection
-    Optionally override MongoDB setup however you want by passing in a pre-configured Collection
-    driver instance.
-@member/Number sessionCacheTimeout
-    Maximum time (milliseconds) to cache a session without confirming its database record. Setting
-    to `0` disables cache timeouts and prevents a session from being reliably invalidated except by
-    timing out naturally.
-@member/Number sessionLifespan
-    Maximum time (milliseconds) that a session token remains valid after it is created. This timeout
-    produces a fresh token without interrupting the active login.
-@member/Number sessionRenewalTimeout
-    Maximum time (milliseonds) since the user's last period of activity until a new session token
-    can no longer be generated. This timeout interrupts the active login.
-@member/Number loginLifespan
-    Maximum time (milliseconds) since the user's last [login event](#setActive) until their active
-    session ends and cannot be renewed. Set to `0` (or another untruthy value) to disable, allowing
-    a sufficiently active session to remain logged in until time stops.
-*/
-/**     @struct substation.Backplane.Configuration
-    Configuration options for the service Backplane.
-@member/String collectionName
-    @default `"Sessions"`
-    Name of the MongoDB collection used to store live connection records. Ignored when using
-    `SessionsCollection`.
-@member/mongodb.Collection|undefined Collection
-    Optionally override MongoDB setup however you want by passing in a pre-configured Collection
-    driver instance.
-@member/Number cacheLinks
-    Maximum number of Link tokens to cache. Set to `0` or any falsey value to disable Link caching.
-@member/Number linkCacheTimeout
-    Maximum time, in milliseconds, to cache Link tokens.
+@member/.Authentication.Configuration Authentication
+@member/.Backplane.Configuration Backplane
 */
 var DEFAULT_CONFIG = {
+    port:                   80,
+    allowForeignSockets:    true,
+    binaryStreams:          false,
+    bufferFiles:            64000,
     databaseName:           'substation',
     databaseAddress:        '127.0.0.1',
     databasePort:           27017,
@@ -80,8 +38,8 @@ var DEFAULT_CONFIG = {
         sessionsCollectionName: 'Sessions',
         sessionCacheTimeout:    1000 * 60 * 30, // thirty minutes
         sessionLifespan:        1000 * 60 * 60 * 24, // one day
-        sessionRenewalTimeout:  1000 * 60 * 60 * 24 * 3,
-        loginLifespan:          1000 * 60 * 60 * 24 * 7 * 2,
+        sessionRenewalTimeout:  1000 * 60 * 60 * 24 * 3, // three days
+        loginLifespan:          1000 * 60 * 60 * 24 * 7 * 2, // two weeks
         cookieLifespan:         1000 * 60 * 60 * 24 * 365 // one year
     },
     Backplane:              {

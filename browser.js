@@ -72,4 +72,42 @@ core.ready = ready;
 core.inherit = require ('./browser/inherit');
 
 
+/**     @property/events.EventEmitter otherTabs
+    @super events.EventEmitter
+    Emit events from the `otherTabs` Object in other tabs.
+*/
+window.otherTabs = {
+    emitter:            new EventEmitter(),
+    addListener:        function(){
+        this.emitter.addListener.apply (this.emitter, arguments);
+    },
+    on:                 function(){
+        this.emitter.on.apply (this.emitter, arguments);
+    },
+    once:               function(){
+        this.emitter.once.apply (this.emitter, arguments);
+    },
+    removeListener:     function(){
+        this.emitter.removeListener.apply (this.emitter, arguments);
+    },
+    removeAllListeners: function(){
+        this.emitter.removeAllListeners.apply (this.emitter, arguments);
+    },
+    setMaxListeners:    function(){
+        this.emitter.setMaxListeners.apply (this.emitter, arguments);
+    },
+    listeners:          function(){
+        this.emitter.listeners.apply (this.emitter, arguments);
+    },
+    emit:               function(){
+        var info = Array.prototype.slice.call (arguments);
+        window.localStorage.setItem ('__substation_event', JSON.stringify (info));
+    }
+};
+window.addEventListener ('storage', function (event) {
+    if (event.key != '__substation_event') return;
+    window.otherTabs.emitter.emit.apply (otherTabs.emitter, JSON.parse (event.newValue));
+});
+
+
 module.exports = core;

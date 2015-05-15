@@ -31,20 +31,66 @@ telecom device or something totally novel to Planet Earth, `substation` aims to 
 signaling requirements, at scale, right out of the box.
 
 
-Getting Started
----------------
+Deployment
+----------
 A MongoDB cluster is required for storing session and live connection metadata. You are under no
 obligation to use MongoDB for any of your application data or otherwise use it for any other
 purpose.
 
 `substation` runs on [Node.js](https://nodejs.org/) and installs with [npm](https://www.npmjs.com/).
-It is configured and launched from a parent script and does not have a CLI tool. A simple, robust
-way to keep your server running is to launch it with
-[forever](https://github.com/foreverjs/forever).
+It is configured and launched from a parent script and does not have a CLI tool. A simple, robust,
+cross-platform way to keep your server running is to launch it with [forever]
+(https://github.com/foreverjs/forever).
 ```bash
-npm install substation
+npm install --save substation
+npm install -g forever
+forever myApp.js
 ```
 
+Like most webapp servers, `substation` must live behind a gateway server for load-balancing. The
+load balancer must be "sticky" - a frequent stream of requests from the same agent must be routed to
+the same service node. This is a requirement of Socket.io. `substation` also currently expects the
+load-balancer to terminate `ssl` connections, as this is generally considered a "best practise" and
+`ssl` termination should probably be done by the most trusted software on your stack. With all love
+for Node, if Node is the most trusted software on your stack you are officially irresponsible.
+
+The recommended load balancer for `substation` is [nginx](http://nginx.org/). Your configuration
+should contain something like this:
+```
+upstream myapp {
+    ip_hash;
+    server alfa.myapp.com;
+    server sierra.myapp.com;
+    server hotel.myapp.com;
+}
+
+server {
+    Listen              443 ssl;
+    server_name         myapp.com;
+    ssl_certificate     myapp.com.crt;
+    ssl_certificate_key myapp.com.key;
+
+    location / {
+        proxy_set_header    X-Real-IP $remote_addr;
+        proxy_set_header    X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header    Host $http_host;
+        proxy_set_header    X-NginX-Proxy true;
+        proxy_http_version  1.1;
+        proxy_set_header    Upgrade $http_upgrade;
+        proxy_set_header    Connection "upgrade";
+        proxy_redirect      off;
+        proxy_pass          http://myapp/;
+    }
+
+    location /static {
+        root                www/myapp/static;
+    }
+}
+```
+
+
+Getting Started
+---------------
 The entry point for a simple application might look something like this:
 ```javascript
 var substation = require ('substation');
@@ -55,7 +101,7 @@ var myServer = new substation (config);
 var otherServer = substation (config);
 
 // set a route
-myServer.action (
+myServer.addAction (
     "GET",
     new RegExp ("/msg/(\\d+)"),
     require ('./src/message/GET')
@@ -71,7 +117,7 @@ myServer.listen (function (err) {
 });
 
 // use the monolith
-substation.action (
+substation.addAction (
     "POST",
     new RegExp ("/msg/(\\d+)"),
     require ('./src/message/POST')
@@ -86,8 +132,8 @@ substation.listen (function (err) {
 });
 ```
 
-To get a handle on what `substation.action (...` does and what `./src/message/POST.js` might look
-like, read on to the next section.
+To get a handle on what `substation.addAction (...` does and what `./src/message/POST.js` might look
+like, read through the next sections.
 
 
 Actions
@@ -102,7 +148,7 @@ console.log ('using http');
 home.goLive (function (err) {
     console.log ('switched to socket.io');
 });
-home.action (
+home.addAction (
     'PUT',
     '/posts/12345',
     { title:postTitle, content:postBody },
@@ -184,8 +230,8 @@ var NewPost = new substation.Action ({
     reply.done (201);
 });
 
-// expose the action on the monolith
-substation.action (
+// export the action on the monolith server
+substation.addAction (
     'PUT',
     /\/post\/(\d+)/,
     NewPost
@@ -334,8 +380,9 @@ substation.on (
 
         connect (
             friend.userID,
+            // connect client to client
             friend.clientID,
-            // identify the user to the client
+            // tell "friend" who "agent" is
             { email:agent.info.email },
             function (err, sent) {
                 // if a message went out
