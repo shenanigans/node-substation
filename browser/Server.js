@@ -39,12 +39,16 @@ var WebRTC_ICE = [
     a common hostname. Connections are manually upgraded to Socket.io with [#goLive]() or by
     requesting a [Peer connection](substation.Peer).
 @argument/substation station
-    Globals are bad so the parent `substation` instance is passed in.
-@argument/url host
-    A `window.location` or `url.parse` of a URL belonging to the remote service.
+    The parent [substation]() instance is passed in.
+@argument/URL host
+    Any [URL]() containing the protocol and hostname of the desired remote service.
 @argument/.Options options
+    Additional configuration options for accessing this service.
 @member/substation station
-@member/url host
+    The parent [substation]() instance.
+@member/URL host
+    A [URL]() containing the protocol and hostname of this service. No promises are made about path,
+    query, and other parameters not required for selecting the service.
 @member/Boolean live
 @member/Boolean liveSocketReady
 @member/Object[substation.Peer] peers
@@ -58,7 +62,7 @@ function Server (station, host, options) {
     options = options || {};
     this.station = station;
     this.host = host;
-    this.live = false;
+    this.isLive = false;
     this.peers = [];
     this.peerIDs = {};
     this.peerIDCallbacks = {};
@@ -103,7 +107,7 @@ Server.prototype.updateOptions = function (options) {
 
 */
 Server.prototype.goLive = function (callback) {
-    if (this.live) {
+    if (this.isLive) {
         if (callback)
             if (this.liveSocketReady)
                 process.nextTick (callback);
@@ -111,7 +115,7 @@ Server.prototype.goLive = function (callback) {
                 (this.liveCallbacks || (this.liveCallbacks = [])).push (callback);
         return;
     }
-    this.live = true;
+    this.isLive = true;
 
     if (this.isDomestic && (this.domestic || (this.domestic = (new cookies()).get ('domestic'))))
         this.liveSocket = socketio (this.host.origin, {

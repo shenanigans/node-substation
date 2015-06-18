@@ -1,5 +1,6 @@
 
 var EventEmitter = require ('events').EventEmitter;
+var MultimediaStream = require ('./MultimediaStream');
 
 // normalize WebRTC primitives
 var PeerConnection =
@@ -58,9 +59,9 @@ var ICECandidate =
     available remote Peers at this time. Note that the Peer instance is not dead, as it can attempt
     to reconnect later, or receive an incoming connection.
 @event stream
-    A MediaStream has been sent by a remote Peer and is now available to consume. Courtesy of the
-    WebRTC api, these streams are emitted midway through connection renegotiation and may not begin
-    receiving data for some time.
+    A [MediaStream](substation.MediaStream) has been sent by a remote Peer and is now available to
+    consume. Courtesy of the WebRTC api, these streams are emitted midway through connection
+    renegotiation and may not begin receiving data for some time.
     @optional
 */
 function Peer (server, query, msg) {
@@ -75,7 +76,7 @@ function Peer (server, query, msg) {
     this.transmitChannels = [];
     this.liveSockets = 0;
     this.outgoingStreams = [];
-    this.incomingStreams = [];
+    this.incomingStreams = {};
 
     this.emitter = new EventEmitter();
     var self = this;
@@ -89,7 +90,6 @@ function Peer (server, query, msg) {
 
     // incoming peer - received init or offer
     this.token = msg.token;
-    console.log (server.iceServers);
     var socket = new PeerConnection({ iceServers:server.iceServers });
     this.assimilateSocket (socket, msg.from);
 
@@ -143,8 +143,17 @@ function Peer (server, query, msg) {
 
 
 /**     @member/Function assimilateSocket
-    @development
-    Prepares a new WebRTC socket for use by the Peer.
+    @private
+    Prepares a new WebRTC socket for use by the Peer. Attaches event listeners for ICE negotiation,
+    [stream closure](#dropSocket) when [errors occur](RTCDataChannel#onerror), [media streams]
+    (substation.MultimediaStream) open. Attaches event listeners to incoming [data channels]
+    (RTCDataChannel). Opens a new [DataChannel](RTCDataChannel) for event passing over the native
+    stream and attaches event listeners to it.
+
+    The new [data channel](RTCDataChannel) is appended to [this.transmitChannels]
+    (#transmitChannels). When the first transmit channel [opens](RTCDataChannel#onopen) the
+    [connect](+connect) event is emitted. Every newly connected [transmit channel](RTCDataChannel)
+    triggers the [socketConnect](+socketConnect) event.
 @argument/RTCPeerConnection socket
 @argument/String SID
 */
@@ -153,6 +162,8 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
     var transmitChannels = this.transmitChannels;
     if (!Object.hasOwnProperty.call (this.sockets, SID))
         this.liveSockets++;
+    else
+        socket.delegate = this.sockets[SID];
     this.sockets[SID] = socket;
     socket.SID = SID;
 
@@ -185,22 +196,18 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
         if (!self.connected) {
             self.connecting = false;
             self.connected = true;
-            if (socket.iceQueue) {
-                for (var i=0,j=socket.iceQueue.length; i<j; i++)
-                    transmitChannel.send (JSON.stringify ({ ICE:iceQueue[i] }));
-                delete socket.iceQueue;
-            }
-            // window.setTimeout (function(){
+            process.nextTick (function(){
                 self.emitter.emit ('connect');
-                self.emitter.emit ('socketConnect', SID);
                 self.server.emit ('peer', self);
                 if (self.connectionQueue) {
                     for (var i=0,j=self.connectionQueue.length; i<j; i++)
                         self.connectionQueue[i]();
                     delete self.connectionQueue;
                 }
-            // }, 250);
+            });
         }
+
+        self.emitter.emit ('socketConnect', SID);
 
         // do we have streams?
         if (!self.outgoingStreams.length)
@@ -225,14 +232,16 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
         // renegotiate
         socket.ready = false;
         if (!socket.createdOffer) {
+            console.log ('post-startup: initiate reverse renegotiation');
             var newSocket = new PeerConnection({ iceServers:self.server.iceServers });
             self.assimilateSocket (newSocket, socket.SID);
             self.emitter.on ('socketConnect', function dropSocket (openSID) {
                 if (openSID != socket.SID) return;
+                console.log ('tripped close 3');
                 socket.close();
                 self.emitter.removeListener ('socketConnect', dropSocket);
             });
-            newSocket.iceQueue = [];
+            // newSocket.iceQueue = [];
             newSocket.createOffer (function (offer) {
                 newSocket.setLocalDescription (offer, function(){
                     socket.transmitChannel.send (JSON.stringify ({ sdp:offer }));
@@ -245,6 +254,7 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
             return;
         }
 
+        console.log ('post-startup: initiate forward renegotiation');
         socket.createOffer (function (offer) {
             socket.setLocalDescription (offer, function(){
                 socket.transmitChannel.send (JSON.stringify ({ sdp:offer }));
@@ -261,16 +271,13 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
         if (!event.candidate)
             return;
 
-        if (socket.iceQueue) {
-            socket.iceQueue.push (event.candidate);
+        if (socket.delegate && socket.delegate.connected) {
+            console.log ('sent ICE by socket');
+            socket.delegate.transmitChannel.send (JSON.stringify ({ ICE:event.candidate }));
             return;
         }
 
-        if (socket.connected) {
-            socket.transmitChannel.send (JSON.stringify ({ ICE:event.candidate }));
-            return;
-        }
-
+        console.log ('sent ICE by server');
         self.server.sendPeerMessage (
             { token:self.token, ICE:JSON.stringify (event.candidate), to:SID }
         );
@@ -289,42 +296,38 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
 
         channel.onmessage = function (event) {
             var msg = JSON.parse (event.data);
+            var updateSocket = self.sockets[SID];
             if (msg.event)
                 self.emitter.emit.apply (self.emitter, msg.event);
-            if (msg.ICE)
-                if (socket.ready) {
-                    socket.addIceCandidate (new ICECandidate (msg.ICE));
+            if (msg.ICE) {
+                if (updateSocket.ready) {
+                    console.log ('using ICE from socket');
+                    updateSocket.addIceCandidate (new ICECandidate (msg.ICE));
                 } else {
-                     if (Object.hasOwnProperty.call (self.iceBox, socket.SID))
-                        self.iceBox[socket.SID].push (msg.ICE);
+                    console.log ('storing ICE from socket');
+                     if (Object.hasOwnProperty.call (self.iceBox, SID))
+                        self.iceBox[SID].push (msg.ICE);
                     else
-                        self.iceBox[socket.SID] = [ msg.ICE ];
+                        self.iceBox[SID] = [ msg.ICE ];
                 }
+            }
             if (!msg.sdp)
                 return;
 
             if (msg.sdp.type == 'answer') {
-                if (!Object.hasOwnProperty.call (self.sockets, socket.SID))
+                if (!Object.hasOwnProperty.call (self.sockets, SID))
                     return;
-                var updateSocket = self.sockets[socket.SID];
+                console.log ('renegotiation answer');
                 updateSocket.setRemoteDescription (
                     new SessionDescription (msg.sdp),
                     function(){
-                        if (updateSocket.iceQueue) {
-                            for (var i=0,j=updateSocket.iceQueue.length; i<j; i++)
-                                self.server.sendPeerMessage ({
-                                    ICE:    JSON.stringify (updateSocket.iceQueue[i]),
-                                    to:     socket.SID,
-                                    token:  self.token
-                                });
-                            delete updateSocket.iceQueue;
-                        }
+                        console.log ('release ICE');
                         updateSocket.ready = true;
-                        if (Object.hasOwnProperty.call (self.iceBox, socket.SID)) {
-                            var tray = self.iceBox[socket.SID];
+                        if (Object.hasOwnProperty.call (self.iceBox, SID)) {
+                            var tray = self.iceBox[SID];
                             for (var i=0,j=tray.length; i<j; i++)
                                 updateSocket.addIceCandidate (new ICECandidate (tray[i]));
-                            delete self.iceBox[socket.SID];
+                            delete self.iceBox[SID];
                         }
                     },
                     function (err) {
@@ -336,23 +339,29 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
 
             socket.ready = false;
             if (socket.createdOffer) {
+                console.log ('accept reverse renegotiation request');
+                // accepting reverse renegotiation request
                 var newSocket = new PeerConnection({ iceServers:self.server.iceServers });
-                self.assimilateSocket (newSocket, socket.SID);
+                self.assimilateSocket (newSocket, SID);
                 self.emitter.on ('socketConnect', function dropSocket (openSID) {
                     if (openSID != socket.SID)
                         return;
+                    console.log ('tripped close 1');
                     socket.close();
                     self.emitter.removeListener ('socketConnect', dropSocket);
                 });
                 newSocket.setRemoteDescription (new SessionDescription (msg.sdp), function(){
+                    console.log ('creating answer');
                     newSocket.createAnswer (function (answer) {
+                        console.log ('setting local description');
                         newSocket.setLocalDescription (new SessionDescription (answer), function(){
+                            console.log ('releasing ICE');
                             newSocket.ready = true;
-                            if (Object.hasOwnProperty.call (self.iceBox, socket.SID)) {
-                                var tray = self.iceBox[socket.SID];
+                            if (Object.hasOwnProperty.call (self.iceBox, SID)) {
+                                var tray = self.iceBox[SID];
                                 for (var i=0,j=tray.length; i<j; i++)
-                                    socket.addIceCandidate (new ICECandidate (tray[i]));
-                                delete self.iceBox[socket.SID];
+                                    newSocket.addIceCandidate (new ICECandidate (tray[i]));
+                                delete self.iceBox[SID];
                             }
                             socket.transmitChannel.send (JSON.stringify ({ sdp:answer }));
                         }, function (err) {
@@ -367,9 +376,14 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
                 return;
             }
 
+            console.log ('accept forward renegotiation request');
+            // accepting forward renegotiation request
             socket.setRemoteDescription (new SessionDescription (msg.sdp), function(){
+                console.log ('creating answer');
                 socket.createAnswer (function (answer) {
+                    console.log ('setting local description');
                     socket.setLocalDescription (answer, function(){
+                        console.log ('releasing ICE');
                         socket.ready = true;
                         if (Object.hasOwnProperty.call (self.iceBox, socket.SID)) {
                             var tray = self.iceBox[socket.SID];
@@ -420,8 +434,20 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
 
     socket.onaddstream = function (event) {
         var stream = event.stream;
-        self.incomingStreams.push (stream);
-        self.emitter.emit ('stream', stream);
+        var index = socket.streamIndex || (socket.streamIndex = 0);
+        socket.streamIndex++;
+        var incomingStreams = Object.hasOwnProperty.call (self.incomingStreams, SID) ?
+            self.incomingStreams[SID]
+          : (self.incomingStreams[SID] = [])
+          ;
+        console.log ('onaddstream', incomingStreams.length, index, stream);
+        if (incomingStreams.length > index)
+            incomingStreams[index].addReplacement (stream);
+        else {
+            var wrappedStream = new MultimediaStream (stream);
+            incomingStreams.push (wrappedStream);
+            self.emitter.emit ('stream', wrappedStream);
+        }
     }
 
     function fatalError (event) {
@@ -439,10 +465,8 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
     or `error` event.
 */
 Peer.prototype.dropSocket = function (socket) {
-    console.log ('dropSocket');
     var found = false;
-    try {
-        // for some reason, firefox throws an error if the socket is already closed
+    try { // for some reason, firefox throws an error if the socket is already closed
         socket.close();
     } catch (err) {}
 
@@ -452,7 +476,10 @@ Peer.prototype.dropSocket = function (socket) {
             found = true;
             break;
         }
-    if (!Object.hasOwnProperty.call (this.sockets, socket.SID))
+    if (
+        !Object.hasOwnProperty.call (this.sockets, socket.SID)
+     || this.sockets[socket.SID] !== socket
+    )
         return found;
     delete this.sockets[socket.SID];
 
@@ -505,20 +532,35 @@ Peer.prototype.processPeerMessage = function (msg) {
     if (!msg.from)
         return;
 
-    console.log ('peer message: '+(msg.sdp ? msg.sdp.type : msg.ICE ? 'ICE' : 'init')+' from '+msg.from);
+    // console.log ('peer message: '+(msg.sdp ? msg.sdp.type : msg.ICE ? msg.ICE : 'init')+' from '+msg.from);
 
     var socket;
     var self = this;
 
-    if (msg.sdp) {
-        if (Object.hasOwnProperty.call (this.sockets, msg.from))
-            socket = this.sockets[msg.from];
-        else {
-            socket = new PeerConnection ({ iceServers:self.server.iceServers });
-            this.assimilateSocket (socket, msg.from);
-        }
+    // init
+    if (msg.init && !Object.hasOwnProperty.call (this.sockets, msg.from)) {
+        socket = new PeerConnection({ iceServers:this.server.iceServers });
+        this.assimilateSocket (socket, msg.from);
+        socket.createdOffer = true;
+        socket.createOffer (function (offer) {
+            socket.setLocalDescription (new SessionDescription (offer), function(){
+                self.server.sendPeerMessage ({ token:msg.token, to:msg.from, sdp:offer });
+            }, function (err) {
+                console.log ('setLocalDescription error', err);
+            });
+        }, function (err) {
+            console.log ('createOffer error', err);
+        });
+    }
 
-        if (msg.sdp.type == 'answer') {
+    // sdp
+    if (msg.sdp) {
+        if (msg.sdp.type == 'answer') { // SDP Answer received
+            if (!Object.hasOwnProperty.call (this.sockets, msg.from)) {
+                console.log ('received answer for unknown socket', msg.from);
+                return;
+            }
+            socket = this.sockets[msg.from];
             socket.setRemoteDescription (new SessionDescription (msg.sdp), function(){
                 // release ICE
                 socket.ready = true;
@@ -535,6 +577,12 @@ Peer.prototype.processPeerMessage = function (msg) {
         }
 
         // SDP Offer received
+        if (Object.hasOwnProperty.call (this.sockets, msg.from))
+            socket = this.sockets[msg.from];
+        else {
+            socket = new PeerConnection ({ iceServers:self.server.iceServers });
+            this.assimilateSocket (socket, msg.from);
+        }
         socket.setRemoteDescription (new SessionDescription (msg.sdp), function(){
             socket.createAnswer (function (answer) {
                 socket.setLocalDescription (answer, function(){
@@ -568,6 +616,7 @@ Peer.prototype.processPeerMessage = function (msg) {
             !Object.hasOwnProperty.call (this.sockets, msg.from)
          || !this.sockets[msg.from].ready
         ) {
+            console.log ('storing ICE');
             if (Object.hasOwnProperty.call (this.iceBox, msg.from))
                 this.iceBox[msg.from].push (ICE);
             else
@@ -575,6 +624,7 @@ Peer.prototype.processPeerMessage = function (msg) {
             return;
         }
         if (ICE && Object.hasOwnProperty.call (this.sockets, msg.from)) try {
+            console.log ('using ICE');
             this.sockets[msg.from].addIceCandidate (new ICECandidate (ICE));
         } catch (err) {
             console.log ('invalid ICE candidate received', err);
@@ -582,22 +632,6 @@ Peer.prototype.processPeerMessage = function (msg) {
                 this.emitter.emit ('error', err);
         }
         return;
-    }
-
-    // init
-    if (msg.init && !Object.hasOwnProperty.call (this.sockets, msg.from)) {
-        var socket = new PeerConnection({ iceServers:this.server.iceServers });
-        this.assimilateSocket (socket, msg.from);
-        socket.createdOffer = true;
-        socket.createOffer (function (offer) {
-            socket.setLocalDescription (new SessionDescription (offer), function(){
-                self.server.sendPeerMessage ({ token:msg.token, to:msg.from, sdp:offer });
-            }, function (err) {
-                console.log ('setLocalDescription error', err);
-            });
-        }, function (err) {
-            console.log ('createOffer error', err);
-        });
     }
 };
 
@@ -622,7 +656,6 @@ Peer.prototype.emit = function(){
             }
             channel.send (msg);
         } catch (err) {
-            console.log (err.stack);
             if (this.dropSocket (channel.socket)) {
                 i--; j--;
             }
@@ -631,13 +664,15 @@ Peer.prototype.emit = function(){
 
 
 /**     @member/Function addStream
-    Send a Stream to every connected Peer instance.
+    Send a Stream to every connected remote Peer instance. Due to multiplexing, it is advisable not
+    to consume streams naively [when receiving them.](+stream)
 @argument/MediaStream stream
 */
 Peer.prototype.addStream = function (stream) {
     var self = this;
+    if (stream instanceof MultimediaStream)
+        stream = stream.stream;
     this.outgoingStreams.push (stream);
-    console.log ('addStream', Object.keys (this.sockets));
     for (var sid in this.sockets) {
         if (!this.sockets[sid].connected) {
             console.log ('socket not connected');
@@ -647,17 +682,23 @@ Peer.prototype.addStream = function (stream) {
         var socket = this.sockets[sid];
         socket.ready = false;
         if (!socket.createdOffer) {
+            // initiate reverse renegotiation
+            console.log ('initiate reverse renegotiation');
             var newSocket = new PeerConnection({ iceServers:self.server.iceServers });
             newSocket.createdOffer = true;
-            self.assimilateSocket (newSocket, socket.SID);
+            self.assimilateSocket (newSocket, sid);
             self.emitter.on ('socketConnect', function dropSocket (openSID) {
-                if (openSID != socket.SID) return;
+                if (openSID != sid) return;
+                console.log ('tripped close 2');
                 socket.close();
                 self.emitter.removeListener ('socketConnect', dropSocket);
             });
-            newSocket.iceQueue = [];
+            // newSocket.iceQueue = [];
+            console.log ('createOffer');
             newSocket.createOffer (function (offer) {
+                console.log ('reverse offer');
                 newSocket.setLocalDescription (offer, function(){
+                    console.log ('reverse setLocalDescription');
                     socket.transmitChannel.send (JSON.stringify ({ sdp:offer }));
                 }, function (err) {
                     console.log ('reengage setLocalDescription error', err);
@@ -668,10 +709,15 @@ Peer.prototype.addStream = function (stream) {
             continue;
         }
 
+        // initiate forward renegotiation
+        console.log ('initiate forward renegotiation');
         socket.addStream (stream);
         socket.createOffer (function (offer) {
             socket.setLocalDescription (offer, function(){
-                socket.transmitChannel.send (JSON.stringify ({ sdp:offer }));
+                socket.transmitChannel.send (JSON.stringify ({
+                    sdp:        offer,
+                    addStream:  [ stream.id ]
+                }));
             }, function (err) {
                 console.log ('renegotiation setLocalDescription error', err);
             });

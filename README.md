@@ -1,7 +1,7 @@
 
 node-substation
 ===============
-**Warning** This library is still in the early development stage. It is not ready for public
+**Warning** This project is still in the early development stage. It is not ready for public
 testing.
 
 A realtime application gateway, session manager, event router and WebRTC signaling server for
@@ -22,13 +22,14 @@ anyone but the top competitive voip companies to manage.
 
 The goal of `substation` is to bridge that gap by reversing signal flow. A user logged in to your
 application no longer has to ask to be reachable, they are reachable by identity as soon as their
-Socket.io connection becomes active. Connection multiplicity is embraced, shipping events to groups
-of related useragents (usually multiple tabs) and creating robust WebRTC peer "Links" that join and
-rejoin as long as both peers remain connected at least once.
+Socket.io connection becomes active. Connection multiplicity is embraced by shipping events to
+groups of related useragents (usually multiple tabs). Robust WebRTC peer "Links" are provided that
+automatically connect and reconnect new connections to the Link as long as both peers maintain at
+least one connection to the server.
 
 Whether your application is a game server, a social application, a collaborative editing tool, a
-telecom device or something totally novel to Planet Earth, `substation` aims to support your
-signaling requirements, at scale, right out of the box.
+telecom service or something totally novel to Planet Earth, `substation` aims to support your
+signaling requirements, at scale, out of the box.
 
 
 Deployment
@@ -52,7 +53,8 @@ load balancer must be "sticky" - a frequent stream of requests from the same age
 the same service node. This is a requirement of Socket.io. `substation` also currently expects the
 load-balancer to terminate `ssl` connections, as this is generally considered a "best practise" and
 `ssl` termination should probably be done by the most trusted software on your stack. With all love
-for Node, if Node is the most trusted software on your stack you are officially irresponsible.
+for Node, if Node is the most trusted software on your entire stack you are being very
+irresponsible.
 
 The recommended load balancer for `substation` is [nginx](http://nginx.org/). Your configuration
 should contain something like this:
@@ -83,7 +85,7 @@ server {
     }
 
     location /static {
-        root                www/myapp/static;
+        root                www/myapp;
     }
 }
 ```
@@ -136,8 +138,7 @@ To get a handle on what `substation.addAction (...` does and what `./src/message
 like, read through the next sections.
 
 
-Actions
--------
+### Actions
 Actions are similar to the routes in other frameworks, except they are accessible over [Socket.io]
 (http://socket.io/) and automatically select whether to apply a template or just send JSON. If you
 use the [Browserify-enabled](http://browserify.org/) client library to perform an Action you need
@@ -239,12 +240,11 @@ substation.addAction (
 ```
 
 
-Authentication
---------------
+### Authentication
 `substation` features an uncommon dual-layer authentication scheme, intended to accomodate
 origin-specific policies by default. Each unique user ID owns any number of unique client IDs,
 representing the individual devices used to access your application. You *must* have a User *and* a
-Client to log in.
+Client to log in. You *may* assign the same Client to every login if you don't need this feature.
 
 A common example of this scheme implemented in the wild is [Steam](http://store.steampowered.com/).
 When connecting to a Steam account from a "new computer" the email-validation stage must be repeated
@@ -254,13 +254,30 @@ in as, and ask `substation` to declare the user "active".
 ```javascript
 var LoginAction = new substation.Action (login);
 function login (station, agent, request, reply) {
+    if (agent.isLoggedIn) {
+        // this User is already logged in
+        return reply.done();
+    }
 
-    // authenticate the user somehow
-    // ...
+    // authenticate the User
+    var userID, clientID;
+    if (agent.client) {
+        // this User has a cookie but not a session
+        // ...
+    } else {
+        // this User is connecting with a new Device
+        // ...
+    }
 
-    // the Boolean argument is rememberMe
+    function finalize (err) {
+        if (err)
+            return reply.done (403);
+        reply.done();
+    }
+
+    // the Boolean argument to setActive is "Remember Me"
     // it controls browser cookie retention
-    agent.setActive (userID, clientID, true, callback);
+    agent.setActive (userID, clientID, true, finalize);
 }
 ```
 
@@ -283,8 +300,7 @@ function PostAction (station, agent, request, reply) {
 ```
 
 
-Events
-------
+### Events
 Emitting an event on a client device is very easy, even if they haven't used an Action recently. You
 may target events to all active connections of a user ID or user/client ID pair.
 
@@ -332,9 +348,12 @@ substation.on ('clientOffline', function (userID) {
 });
 ```
 
+A small note: if you were smashing "refresh" on your test application and now your Users and Clients
+appear to be stuck online, wait ten seconds for Socket.io connections which failed in the
+polling/upgrade phase to timeout.
 
-WebRTC
-------
+
+### WebRTC
 WebRTC connections are made semi-automatically. The request is initialized by the client machine and
 produces an event on the server. Listeners on this event may allow the connection to proceed, after
 which remaining SDP and ICE exchange phases are automatic. The "Link" created between two Users or
@@ -349,6 +368,14 @@ time without disruption. Multimedia streams will be duplicated to every connecte
 so multimedia applications should consider selecting Peers by Client and disabling streams when not
 in use. Remember that if no Elements on the page refer to the stream no packets will be sent,
 however calling `pause()` is not sufficient.
+
+Due to the insanity that is WebRTC, Some stream renegotiation phases would normally disrupt your
+existing streams, replacing them with duplicates. In these cases, `substation` will attempt to swap
+the replacement stream into any `<video>` elements on the page and the stream should not emit the
+`close` event. Unfortunately, the "unique id" set to incoming streams in most browsers today is
+always "default" which complicates multiplexing somewhat. If you wish to use multiple streams per
+client, they must be **either** differentiable by introspection, i.e. one audio one video, different
+bitrates, etc. **or** only add or remove all streams simultaneously.
 
 On the client:
 ```javascript

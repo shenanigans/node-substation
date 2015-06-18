@@ -1,5 +1,6 @@
 
 var Server = require ('./browser/Server');
+var MultimediaStream = require ('./browser/MultimediaStream');
 var EventEmitter = require ('events').EventEmitter;
 var url = require ('url');
 
@@ -8,6 +9,9 @@ var url = require ('url');
     Realtime application gateway and authentication provider.
 */
 var core = new EventEmitter();
+module.exports = core;
+core.MultimediaStream = MultimediaStream;
+core.getUserMedia = MultimediaStream.getUserMedia;
 
 
 /**     @property/Function getServer
@@ -108,6 +112,3 @@ window.addEventListener ('storage', function (event) {
     if (event.key != '__substation_event') return;
     window.otherTabs.emitter.emit.apply (otherTabs.emitter, JSON.parse (event.newValue));
 });
-
-
-module.exports = core;

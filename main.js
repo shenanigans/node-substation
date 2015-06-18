@@ -26,16 +26,16 @@ var DEFAULT_CONFIG = {
     allowForeignSockets:    true,
     binaryStreams:          false,
     bufferFiles:            64000,
-    databaseName:           'substation',
-    databaseAddress:        '127.0.0.1',
+    databaseName:           "substation",
+    databaseAddress:        "127.0.0.1",
     databasePort:           27017,
-    sessionCollectionName:  'Session',
+    sessionCollectionName:  "Session",
     LinksCollectionName:    "Links",
     loggingLevel:           "info",
     applicationName:        "substation",
     Authentication:         {
         cacheSessions:          100000,
-        sessionsCollectionName: 'Sessions',
+        sessionsCollectionName: "Sessions",
         sessionCacheTimeout:    1000 * 60 * 30, // thirty minutes
         sessionLifespan:        1000 * 60 * 60 * 24, // one day
         sessionRenewalTimeout:  1000 * 60 * 60 * 24 * 3, // three days
@@ -44,8 +44,8 @@ var DEFAULT_CONFIG = {
     },
     Backplane:              {
         port:                   9001,
-        collectionName:         'Backplane',
-        hostsCollectionName:    'BackplaneHosts',
+        collectionName:         "Backplane",
+        hostsCollectionName:    "BackplaneHosts",
         cacheLinks:             20480,
         linkCacheTimeout:       1000 * 60 * 5 // five minutes
     }
@@ -53,7 +53,7 @@ var DEFAULT_CONFIG = {
 
 
 /**     @module/class substation
-    @parent events.EventEmitter
+    @super events.EventEmitter
     Realtime application gateway and authentication provider. You may either instantiate or use this
     module as a monad.
 @event userOnline
