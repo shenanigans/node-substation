@@ -96,11 +96,12 @@ module.exports = MultimediaStream;
 @argument/MediaStream replacement
 */
 MultimediaStream.prototype.addReplacement = function (replacement) {
-    console.log ('addReplacement');
     if (this.replacement)
         rejectNative (this.replacement);
     this.assimilateNative (replacement);
     this.replacement = replacement;
+    if (!this.state)
+        this.swapNatives();
 };
 
 /**     @member/Function swapNatives
@@ -109,8 +110,14 @@ MultimediaStream.prototype.addReplacement = function (replacement) {
     [this.stream](#stream), then disable the current stream's event listeners and swap the
     replacement into `this.stream`.
 */
+/**     @event swap
+    If the underlying stream is exchanged for another, for example during a WebRTC renegotiation,
+    this event is emitted just before automatic `src` swapping occurs. It's useful when you're
+    consuming streams outside of a `<video>` or `<audio>` tag.
+@argument/MediaStream newNative
+    The new native stream being swapped in.
+*/
 MultimediaStream.prototype.swapNatives = function(){
-    console.log ('swapNatives');
     if (!this.replacement)
         return;
 
@@ -118,9 +125,14 @@ MultimediaStream.prototype.swapNatives = function(){
     this.stream = this.replacement;
     delete this.replacement;
 
+    this.emit ('swap', this.stream);
+
     if (!this.url) // if nobody has called toURL yet, nobody is consuming this stream
         return;
-    var elems = window.document.getElementsByTagName ('video');
+
+    var elems = [];
+    elems.push.apply (elems, window.document.getElementsByTagName ('video'));
+    elems.push.apply (elems, window.document.getElementsByTagName ('audio'));
     if (!elems.length) return;
 
     var oldURL = this.url;
@@ -159,10 +171,9 @@ MultimediaStream.prototype.startNative = function (native) {
     The [MediaStream]() that emitted this event.
 */
 MultimediaStream.prototype.endNative = function (native) {
-    if (this.replacement === native || this.stream !== native)
+    if (this.replacement === native || this.stream !== native || this.state === false)
         return;
-    if (this.state === false)
-        return;
+
     if (this.replacement) {
         this.swapNatives();
         return;
@@ -196,6 +207,52 @@ function rejectNative (native) {
     delete native.onstarted;
     delete native.onended;
 }
+
+/**     @member/Function close
+    @api
+    Terminate the stream and remove it from any [Elements]() currently playing it.
+*/
+MultimediaStream.prototype.close = function(){
+    if (this.stream) {
+        rejectNative (this.stream);
+        if (this.stream.stop)
+            this.stream.stop();
+    }
+    if (this.replacement) {
+        rejectNative (this.replacement);
+        if (this.replacement.stop)
+            this.replacement.stop();
+    }
+
+    if (!this.url) {
+        if (this.state !== false) {
+            this.state = false;
+            this.emit ('close');
+        }
+        return;
+    }
+
+    var elems = [];
+    elems.push.apply (elems, window.document.getElementsByTagName ('video'));
+    elems.push.apply (elems, window.document.getElementsByTagName ('audio'));
+    if (!elems.length) {
+        if (this.state !== false) {
+            this.state = false;
+            this.emit ('close');
+        }
+        return;
+    }
+    for (var i=0,j=elems.length; i<j; i++)
+        if (elems[i].getAttribute ('src') == this.url) {
+            elems[i].pause();
+            elems[i].removeAttribute ('src');
+        }
+    delete this.url;
+    if (this.state !== false) {
+        this.state = false;
+        this.emit ('close');
+    }
+};
 
 /**     @member/Function addTrack
     @api
@@ -254,5 +311,5 @@ MultimediaStream.prototype.removeTrack = function (track) { return this.stream.r
     An Object URL for consuming the media stream.
 */
 MultimediaStream.prototype.toURL = function(){
-    return this.url || ( this.url = URL.createObjectURL (this.stream); );
+    return this.url || ( this.url = URL.createObjectURL (this.stream) );
 };
