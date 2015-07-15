@@ -39,6 +39,7 @@ core.getServer = getServer;
     exists.
 */
 function sendEvents (events) {
+    console.log ('sendEvents', events, this.isReady);
     if (!this.isReady) {
         (this.eventQueue || (this.eventQueue = [])).push.apply (this.eventQueue, events);
         return;

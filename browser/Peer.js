@@ -174,18 +174,22 @@ Peer.prototype.releaseICE = function (socket) {
 
 /**     @member/Function assimilateSocket
     @private
-    Prepares a new WebRTC socket for use by the Peer. Attaches event listeners for ICE negotiation,
-    [stream closure](#dropSocket) when [errors occur](RTCDataChannel#onerror), [media streams]
-    (substation.MultimediaStream) open. Attaches event listeners to incoming [data channels]
-    (RTCDataChannel). Opens a new [DataChannel](RTCDataChannel) for event passing over the native
-    stream and attaches event listeners to it.
+    Prepares a new WebRTC socket for use by the Peer. Attaches event listeners to a native socket
+    to accomplish the following tasks:
+     * ICE negotiation
+     * [Socket closure](#dropSocket) when [errors occur](RTCDataChannel#onerror)
+     * [Media stream](substation.MultimediaStream) handling for [addStream](#addStream) and
+        [removeStream](#removeStream).
+     * Wire incoming [data channels](RTCDataChannel) to receive events and send keepalive pings.
+     * Open a new [DataChannel](RTCDataChannel) for [sending events](#emit).
 
-    The new [data channel](RTCDataChannel) is appended to [this.transmitChannels]
-    (#transmitChannels). When the first transmit channel [opens](RTCDataChannel#onopen) the
-    [connect](+connect) event is emitted. Every newly connected [transmit channel](RTCDataChannel)
-    triggers the [socketConnect](+socketConnect) event.
+    Every newly connected socket triggers the [socketConnect](+socketConnect) event. The *first*
+    connected socket triggers the [connected](+connected) event.
 @argument/RTCPeerConnection socket
+    The new native socket to assimilate.
 @argument/String SID
+    A unique identifier associated with this specific remote context. It is assigned by the server
+    and arrives with the earliest connection signals.
 */
 var nextDebug = 1;
 Peer.prototype.assimilateSocket = function (socket, SID) {
@@ -408,7 +412,7 @@ Peer.prototype.assimilateSocket = function (socket, SID) {
 */
 Peer.prototype.dropSocket = function (socket) {
     var found = false;
-    try { // for some reason, firefox throws an error if the socket is already closed
+    try { // for some reason the spec says closed sockets cannot be reclosed
         socket.close();
     } catch (err) {}
 
@@ -466,7 +470,17 @@ Peer.prototype.connect = function (callback) {
 
 
 /**     @member/Function renegotiate
-
+    @private
+    Establish a new connection supporting the current stream configuration. Optionally sends a list
+    of dropped stream indices to the remote Peer. If the stream configuration is empty, the remote
+    Peer is asked to call `renegotiate` instead as an empty SDP offer cannot be met with a populated
+    answer. The `forced` flag is used to prevent looping when neither Peer has streams.
+@argument/Array|undefined removeIndexes
+    An Array of stream indices that have just been removed.
+@argument/Boolean forced
+    @optional
+    This flag prevents renegotiations from being sent to the remote Peer. Used when such a request
+    already got us here, to prevent looping.
 */
 Peer.prototype.renegotiate = function (removeIndexes, forced) {
     var self = this;
@@ -513,8 +527,9 @@ Peer.prototype.renegotiate = function (removeIndexes, forced) {
 
 
 /**     @member/Function processPeerMessage
-    @development
-    React to a peer signal Object from the server.
+    @private
+    React to a peer signal Object from the server. Responds to `init` with an SDP offer, responds to
+    an offer with an answer, routes answers to their respective sockets and routes ICE messages.
 @argument/Object msg
 */
 Peer.prototype.processPeerMessage = function (msg) {
@@ -522,8 +537,6 @@ Peer.prototype.processPeerMessage = function (msg) {
         this.token = msg.token;
     if (!msg.from)
         return;
-
-    // console.log ('peer message: '+(msg.sdp ? msg.sdp.type : msg.ICE ? msg.ICE : 'init')+' from '+msg.from);
 
     var socket;
     var self = this;
@@ -546,7 +559,8 @@ Peer.prototype.processPeerMessage = function (msg) {
 
     // sdp
     if (msg.sdp) {
-        if (msg.sdp.type == 'answer') { // SDP Answer received
+        if (msg.sdp.type == 'answer') {
+            // SDP Answer received
             if (!Object.hasOwnProperty.call (this.sockets, msg.from))
                 return;
             socket = this.sockets[msg.from];
@@ -657,12 +671,15 @@ Peer.prototype.addStream = function(){
     var doRenegotiate = false;
     for (var i=0,j=arguments.length; i<j; i++) {
         var stream = arguments[i];
-        if (stream instanceof MultimediaStream)
+        if (stream instanceof MultimediaStream) {
+            if (this.outgoingStreams.indexOf (stream.stream) >= 0)
+                continue;
+            stream.on ('close', function(){ self.removeStream (stream); });
             stream = stream.stream;
-        if (this.outgoingStreams.indexOf (stream) < 0) {
-            this.outgoingStreams.push (stream);
-            doRenegotiate = true;
-        }
+        } else if (this.outgoingStreams.indexOf (stream) >= 0)
+            continue;
+        this.outgoingStreams.push (stream);
+        doRenegotiate = true;
     }
 
     if (doRenegotiate)

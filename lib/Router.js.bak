@@ -23,7 +23,6 @@ function Router (parent, config) {
     Common.merge (this.config, config);
 
     this.actions = [];
-    this.actionNames = {};
 }
 
 
@@ -39,7 +38,7 @@ Router.prototype.init = function (callback) {
         action.setup (self.parent, context, callback);
     }, function (err) {
         if (err) {
-            self.parent.logger.fatal ('Action failed during setup', err);
+            this.parent.logger.fatal ('Action failed during setup', err);
             return process.exit (1);
         }
         async.each (self.actions, function (action, callback) {
@@ -85,29 +84,18 @@ Router.prototype.addAction = function (/* method, route, action */) {
 
     if (method)
         action.method = method.toUpperCase();
-    else if (action.config.method)
-        action.method = action.config.method;
     if (route)
         if (typeof route == 'string')
             action.route = stringToRoute (route);
         else
             action.route = route;
-    else if (action.config.route)
-        if (typeof action.config.route == 'string')
-            action.route = stringToRoute (action.config.route);
-        else
-            action.route = action.config.route;
-
     if (!action.name)
-        if (action.route)
+        if (route)
             action.name = (action.method||'')+':'+action.route.toString().slice(1,-1);
         else
             action.name = (action.method||'')+':/'
 
     this.actions.push (action);
-    // index first action of each name
-    if (!Object.hasOwnProperty.call (this.actionNames, action.name))
-        this.actionNames[action.name] = action;
 };
 
 
@@ -120,38 +108,18 @@ Router.prototype.addAction = function (/* method, route, action */) {
     @argument/Array[String] params
         @optional
 */
-Router.prototype.getAction = function (request, callback) {
+Router.prototype.getAction = function (path, method, callback) {
     for (var i=0,j=this.actions.length; i<j; i++) {
         var action = this.actions[i];
-        if (action.method && action.method != request.method)
+        if (action.method && action.method != method)
             continue;
         if (!action.route)
-            return callback (action, [ request.url ]);
-        var match = action.route.exec (request.url);
+            return callback (action, [ path ]);
+        var match = action.route.exec (path);
         if (!match)
             continue;
         return callback (action, match.slice (1));
     }
-    callback();
-};
-
-
-/**     @member/Function getActionByName
-
-*/
-Router.prototype.getActionByName = function (name, callback) {
-    if (Object.hasOwnProperty.call (this.actionNames, name))
-        return callback (undefined, this.actionNames[name]);
-    callback();
-};
-
-
-/**     @member/Function configureActions
-
-*/
-Router.prototype.configureActions = function (config, callback) {
-    for (var i=0,j=this.actions.length; i<j; i++)
-        this.actions[i].configure (config);
     callback();
 };
 
@@ -161,12 +129,12 @@ Router.prototype.configureActions = function (config, callback) {
     requests.
 @argument/String path
 */
-Router.prototype.getOptions = function (request, callback) {
+Router.prototype.getOptions = function (path) {
     var methods = {};
     for (var i=0,j=this.actions.length; i<j; i++) {
         var action = this.actions[i];
         var method = action.method || 'GET';
-        if (action.route && !action.route.exec (request.url))
+        if (action.route && !action.route.exec (path))
             continue;
         if (Object.hasOwnProperty.call (methods, method))
             continue; // first action wins
@@ -181,7 +149,7 @@ Router.prototype.getOptions = function (request, callback) {
             doc.body = action.bodySchemaExport;
         continue;
     }
-    callback (methods);
+    return methods;
 }
 
 

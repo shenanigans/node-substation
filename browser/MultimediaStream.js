@@ -15,17 +15,32 @@ var inherit = require ('./inherit');
 
 
 /**     @property/Function substation.getUserMedia
-
+    A wrapped version of the native getUserMedia function that produces [MultimediaStream]
+    (substation.MultimediaStream) instances with a more modern callback style.
+@argument/Object constraints
+@callback
+    @argument/Error|undefined err
+        If multimedia streams are not available or have been refused by the user, an Error is
+        returned. Because Chrome has a tendency to sporadically throw `DevicesNotFoundError`
+        incorrectly, multiple attempts will be made whenever this `Error.name` is encountered.
+    @argument/substation.MultimediaStream
+        @optional
+        The multimedia stream approved by the user, unless they refused or an error occured.
 */
 function getUserMedia (constraints, callback) {
     if (!getterName)
         throw new Error ('getUserMedia not available');
     constraints = constraints || { audio:true, video:true };
-    navigator[getterName] (constraints, function (stream) {
-        callback (undefined, new MultimediaStream (stream));
-    }, function (err) {
-        callback (err);
-    });
+    var attempts = 5;
+    (function getMedia(){
+        navigator[getterName] (constraints, function (stream) {
+            callback (undefined, new MultimediaStream (stream));
+        }, function (err) {
+            if (err.name == 'DevicesNotFoundError' && --attempts)
+                return setTimeout (getMedia, 150);
+            callback (err);
+        });
+    })();
 }
 
 
@@ -36,15 +51,18 @@ function getUserMedia (constraints, callback) {
     Wraps the native [MediaStream]() api for multimedia content streams with something a little more
     modern and comfortable. Automatic handling of "replacement streams" allows WebRTC streams to
     persist across connection renegotiations in a transparent manner. To consume a
-    `MultimediaStream` get an Object URL and set it to the `src` attribute of a media [Element]().
+    `MultimediaStream` simply [get an Object URL](#toURL) and set it to the `src` attribute of a
+    media [Element](). It will be automagically kept up to speed on any changes to the [native
+    stream](MediaStream).
 
     In this example, an incoming stream from a [WebRTC peer](substation.Peer) is consumed. Note that
     because multiple contexts may receive this stream, it's usually not the best idea to consume a
     stream without asking the user.
+
     ```javascript
-    remotePeer.on ('stream', function (stream) {
+    peerConnection.on ('stream', function (stream) {
         var mediaElem = document.createElement ('video');
-        mediaElem.src = stream.toURL();
+        mediaElem.setAttribute ('src', stream.toURL());
         document.getElementById ('MediaContainer')
             .appendChild (mediaElem)
             ;
@@ -57,16 +75,16 @@ function getUserMedia (constraints, callback) {
 @member/Boolean ended
     `true` for Streams that have been closed. The less fashionable name for `closed`.
 @member/String id
-    Native String GUID assigned to the stream. No other MediaStream in the universe should have the
-    same one of these.
+    Native String GUID assigned to the stream. No other MediaStream in the universe **should** have
+    the same one of these. However, user media support is still clownshoes in all browsers so expect
+    to see repetitive `id` Strings such as `"default"` or `""` for streams from [getUserMedia]
+    (substation.getUserMedia).
 @event open
     The underlying [MediaStream]() has signaled that it is ready to begin sending content. New event
     listeners will fire immediately if the stream is currently open. This even will not fire again
     unless a [close](+close) event has occured.
 @event close
     The underlying [MediaStream]() has closed and probably will not continue.
-@event error
-    The wrapped MediaStream closed due to an unexpected failure.
 @event addTrack
     A media track was added to the stream.
 @event removeTrack
@@ -199,30 +217,28 @@ MultimediaStream.prototype.assimilateNative = function (native) {
 
 /**     @local/Function rejectNative
     @private
-    Strip event listeners from a native MediaStream.
+    Strip event listeners from a native MediaStream and call `stop` if available.
 */
 function rejectNative (native) {
     delete native.onaddtrack;
     delete native.onremovetrack;
     delete native.onstarted;
     delete native.onended;
+    if (native.stop)
+        native.stop();
 }
 
 /**     @member/Function close
     @api
-    Terminate the stream and remove it from any [Elements]() currently playing it.
+    Terminate the stream and remove it from any [Elements]() currently playing it. Native streams
+    will be stopped. If the stream was previously [sent to a Peer](Peer#addStream) it will be
+    removed from the link.
 */
 MultimediaStream.prototype.close = function(){
-    if (this.stream) {
+    if (this.stream)
         rejectNative (this.stream);
-        if (this.stream.stop)
-            this.stream.stop();
-    }
-    if (this.replacement) {
+    if (this.replacement)
         rejectNative (this.replacement);
-        if (this.replacement.stop)
-            this.replacement.stop();
-    }
 
     if (!this.url) {
         if (this.state !== false) {

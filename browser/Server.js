@@ -6,6 +6,7 @@ var socketio = require ('socket.io-client');
 var Peer = require ('./Peer');
 var inherit = require ('./inherit');
 var EventEmitter = require ('events').EventEmitter;
+var filth = require ('filth');
 
 function cookies(){
     this.keys = {};
@@ -53,13 +54,13 @@ var WebRTC_ICE = [
 @member/Boolean liveSocketReady
 @member/Object[substation.Peer] peers
 @member/Number nextActionID
-@member/Number actionTimeout
-    @default `3000`
 @member/Object[Function] actionCallbacks
 */
 function Server (station, host, options) {
     EventEmitter.call (this);
-    options = options || {};
+    this.options = filth.clone (DEFAULT_OPTIONS);
+    if (options)
+        filth.merge (this.options, options);
     this.station = station;
     this.host = host;
     this.isLive = false;
@@ -69,7 +70,6 @@ function Server (station, host, options) {
     this.peerTokens = {};
     this.nextActionID = 1;
     this.actionCallbacks = {};
-    this.actionTimeout = 3000;
 
     // domestic host?
     if (this.host.hostname == window.location.hostname) {
@@ -79,27 +79,33 @@ function Server (station, host, options) {
     }
 
     // ICE Server configuration
-    if (options.iceServers)
-        this.iceServers = options.iceServers
+    if (this.options.iceServers)
+        this.iceServers = this.options.iceServers
     else
         this.iceServers = WebRTC_ICE.slice();
 }
 inherit (Server, EventEmitter);
 
 
-/**     @property/class Options
+/**     @property/class Configuration
 @member/Array[Object] iceServers
-    A [list of ICE servers](https://developer.mozilla.org/en-US/docs/Web/API/RTCConfiguration) that
-    will fully override the default list.
+    A list of ICE servers that will fully override the default list. See the native documentation
+    for [RTCConfiguration](https://developer.mozilla.org/en-US/docs/Web/API/RTCConfiguration).
+@member/Number actionTimeout
+    @default `3000`
 */
+var DEFAULT_OPTIONS = {
+    iceServers:     WebRTC_ICE,
+    actionTimeout:  3000
+};
 
 
 /**     @member/Function updateOptions
-
+    Change configuration options.
+@argument/.Configuration options
 */
 Server.prototype.updateOptions = function (options) {
-    if (options.iceServers)
-        this.iceServers = options.iceServers;
+    filth.merge (this.options, options);
 };
 
 
@@ -477,7 +483,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
             timer = setTimeout (function(){
                 timedOut = true;
                 callback (new Error ('action timed out'));
-            }, this.actionTimeout);
+            }, this.options.actionTimeout);
         }
         this.liveSocket.emit ('action', action);
         return this;
@@ -534,7 +540,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
 
     var self = this;
     var startTime = (new Date()).getTime();
-    var timeout = this.actionTimeout;
+    var timeout = this.options.actionTimeout;
     var timer, timedOut = false;
     var request = http.request (opts, function (response) {
         var docstr = '';
@@ -565,7 +571,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
         timer = setTimeout (function(){
             timedOut = true;
             callback (new Error ('action timed out'));
-        }, this.actionTimeout);
+        }, this.options.actionTimeout);
 
         request.on ('error', function (err) {
             if (timedOut) return;
