@@ -5,16 +5,20 @@ var path            = require ('path');
 var EventEmitter    = require ('events').EventEmitter;
 var https           = require ('https');
 var http            = require ('http');
+var os              = require ('os');
 var bunyan          = require ('bunyan');
 var async           = require ('async');
 var filth           = require ('filth');
 var RemoteTransport = require ('./lib/RemoteTransport');
+var Router          = require ('./lib/Router');
+var DEFAULT_CONFIG  = require ('submergence').DEFAULT_CONFIG;
 
 var standalone =
     '<script type="text/javascript">'
   + fs.readFileSync (path.resolve (__dirname, './build/bundle.js')).toString()
   + '</script>'
   ;
+
 
 /**     @module/class substation:Remote
     @super events.EventEmitter
@@ -40,7 +44,7 @@ function Remote (config) {
         stream: process.stdout,
         level:  this.config.loggingLevel
     });
-    this.server = new RemoteTransport (config, this.logger);
+    this.server = new RemoteTransport (config, this);
     this.router = new Router (this, this.config);
 
     if (
@@ -50,6 +54,7 @@ function Remote (config) {
         throw new Error ('APIKey and APIHost are required');
 }
 util.inherits (Remote, EventEmitter);
+module.exports = Remote;
 
 /**     @member/Function addAction
 
@@ -64,37 +69,141 @@ Remote.prototype.addAction = function(){
 Remote.prototype.listen = function (port, callback) {
     var self = this;
 
-    // we must check the remote configuration and optionally overwrite it
-    var pathstr =
-        '/config?apiKey='
-      + this.config.APIKey
-      + '&domain='
-      + this.config.domain
-      ;
-    var eventRequest = http.request ({
-        host:   this.config.APIHost,
-        path:   pathstr,
-        method: 'POST'
-    }, function (response) {
-        var chunks = [];
-        response.on ('data', function (chunk) { chunks.push (chunk); });
-        response.on ('error', function (err) {
-            self.logger.fatal (err, 'could not pull a configuration from the remote service');
-        });
-        response.on ('end', function(){
-            try {
-                var body = JSON.parse (Buffer.concat (chunks).toString());
-            } catch (err) {
-                if (callback)
-                    return self.logger.fatal ('remote service response was invalid JSON');
-                return;
-            }
-
-        });
-    });
+    // setup the API forwarding information for this node
+    // unless already configured
+    if (!this.config.APIForward)
+        this.config.APIForward = {
+            host:   os.hostname(),
+            port:   port
+        };
 
     this.router.init (function(){
-        self.server.listen (port, self.router, callback);
+        function cleanup (err) {
+            if (err)
+                return self.logger.fatal (err);
+            self.server.listen (port, self.router, callback);
+        }
+
+        // we must check the remote configuration and optionally overwrite it
+        var pathstr =
+            '/config?apiKey='
+          + encodeURIComponent (self.config.APIKey)
+          + '&domain='
+          + encodeURIComponent (self.config.domain)
+          ;
+        var configRequest = http.request ({
+            host:       self.config.APIHost,
+            path:       pathstr,
+            method:     'GET',
+            headers:    {
+                Accept:     'application/json'
+            }
+        }, function (response) {
+            var chunks = [];
+            response.on ('data', function (chunk) { chunks.push (chunk); });
+            response.on ('error', function (err) {
+                self.logger.fatal (err, 'could not pull a configuration from the remote service');
+            });
+            response.on ('end', function(){
+                try {
+                    var currentConfig = JSON.parse (Buffer.concat (chunks).toString());
+                } catch (err) {
+                    self.logger.fatal ('remote service response was invalid JSON');
+                    return;
+                }
+                currentConfig = currentConfig.content;
+                var configID = currentConfig._id;
+                delete currentConfig._id;
+
+                self.router.getAllActions (function (err, actions) {
+                    if (err)
+                        return self.logger.fatal (err);
+
+                    var newConfig = {
+                        actions:    actions.map (function (item) {
+                            var actionDoc = item.export();
+                            actionDoc.forward = filth.clone (self.config.APIForward);
+                            return actionDoc;
+                        })
+                    };
+
+                    if (filth.compare (actions, currentConfig)) {
+                        self.logger.info ('remote configuration matches');
+                        return cleanup();
+                    }
+
+                    if (!self.config.APIOverwriteActions) {
+                        self.logger.fatal (
+                            'remote service configuration does not match local server'
+                        );
+                        return process.exit (1);
+                    }
+
+                    var pathstr =
+                        '/config/'
+                      + encodeURIComponent (configID)
+                      + '?apiKey='
+                      + encodeURIComponent (self.config.APIKey)
+                      ;
+
+                    var configWriteRequest = http.request ({
+                        host:       self.config.APIHost,
+                        path:       pathstr,
+                        method:     'PUT',
+                        headers:    {
+                            Accept:     'application/json'
+                        }
+                    }, function (response) {
+                        if (response.statusCode == '200') {
+                            // config written successfully
+                            response.removeAllListeners();
+                            response.emit ('end');
+                            cleanup();
+                            return;
+                        }
+
+                        var chunks = [];
+                        response.on ('data', function (chunk) { chunks.push (chunk); });
+                        response.on ('error', function (err) {
+                            self.logger.fatal (err, 'failed to write config to remote service');
+                            return process.exit (1);
+                        });
+                        response.on ('end', function(){
+                            try {
+                                var responseBody = JSON.parse (Buffer.concat (chunks).toString());
+                            } catch (err) {
+                                self.logger.fatal ('remote service responded with invalid json');
+                                return process.exit (1);
+                            }
+
+                            console.log ('body', response.statusCode, responseBody);
+                            if (response.statusCode == '400')
+                                self.logger.fatal (
+                                    'remote service rejected configuration as invalid'
+                                );
+                            else if (response.statusCode == '403')
+                                self.logger.fatal ('remote service rejected the APIKey');
+                            else
+                                self.logger.fatal ('unknown remote service error');
+                            return process.exit (1);
+                        });
+                    });
+                    configWriteRequest.on ('error', function (err) {
+                        self.logger.fatal (err, 'failed to update remote configuration');
+                        return process.exit (1);
+                    });
+                    configWriteRequest.write (JSON.stringify (newConfig));
+                    configWriteRequest.end();
+                });
+            });
+        });
+
+        configRequest.on ('error', function (err) {
+            self.logger.fatal (err, 'failed to read remote configuration');
+            return process.exit (1);
+        });
+        configRequest.end();
+
     });
 };
 
@@ -134,9 +243,12 @@ Remote.prototype.sendEvent = function (/* user, client, info, callback */) {
     if (client)
         pathstr += '&client=' + encodeURIComponent (client);
     var eventRequest = http.request ({
-        host:   this.config.APIHost,
-        path:   pathstr,
-        method: 'POST'
+        host:       this.config.APIHost,
+        path:       pathstr,
+        method:     'POST',
+        headers:    {
+            Accept:     'application/json'
+        }
     }, function (response) {
         var chunks = [];
         response.on ('data', function (chunk) { chunks.push (chunk); });

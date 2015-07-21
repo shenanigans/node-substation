@@ -41,7 +41,7 @@ function substation (config) {
     this.router = new Router (this, this.config);
     this.logger = this.server.logger;
 }
-util.inherits (substation, EventEmitter);
+// util.inherits (substation, EventEmitter);
 substation.Remote = Remote;
 
 
@@ -95,7 +95,7 @@ substation.prototype.addAction = function(){
 @callback
     @optional
 */
-substation.prototype.sendEvent = function(/* user, client, info, callback */){
+substation.prototype.sendEvent = function (/* user, client, info, callback */) {
     var user, client, info, callback;
     switch (arguments.length) {
         case 2:
@@ -120,9 +120,9 @@ substation.prototype.sendEvent = function(/* user, client, info, callback */){
         ); });
 
     try {
-        return this.backplane.sendEvent (user, client, info, callback);
+        return this.server.sendEvent (this.config.domain || null, user, client, info, callback);
     } catch (err) {
-        self.logger.error ({ method:"sendEvent" }, err);
+        self.logger.error (err, 'failed to send event');
         if (callback)
             process.nextTick (callback);
     }
@@ -138,8 +138,47 @@ substation.prototype.sendEvent = function(/* user, client, info, callback */){
     @argument/Error|undefined err
     @argument/Boolean isActive
 */
-substation.prototype.isActive = function(){
-    return this.backplane.isActive.apply (this.backplane, arguments);
+substation.prototype.isActive = function (/* user, client, callback */) {
+    var user, client, callback;
+    if (arguments.length == 2) {
+        user = arguments[0];
+        callback = arguments[1];
+    } else {
+        user = arguments[0];
+        client = arguments[1];
+        callback = arguments[2];
+    }
+
+    try {
+        return this.server.isActive (this.config.domain || null, user, client, callback);
+    } catch (err) {
+        this.logger.error (err, 'failed to check if a user/client is active');
+        if (callback)
+            process.nextTick (function(){ callback (err); });
+    }
+};
+
+// proxy events:EventEmitter methods to underlying submergence
+substation.prototype.addListener = function(){
+    this.server.addListener.apply (this.server, arguments);
+};
+substation.prototype.on = function(){
+    this.server.on.apply (this.server, arguments);
+};
+substation.prototype.once = function(){
+    this.server.once.apply (this.server, arguments);
+};
+substation.prototype.removeListener = function(){
+    this.server.removeListener.apply (this.server, arguments);
+};
+substation.prototype.removeAllListeners = function(){
+    this.server.removeAllListeners.apply (this.server, arguments);
+};
+substation.prototype.setMaxListeners = function(){
+    this.server.setMaxListeners.apply (this.server, arguments);
+};
+substation.prototype.listeners = function(){
+    this.server.listeners.apply (this.server, arguments);
 };
 
 
@@ -169,14 +208,15 @@ function configure (config) {
     @argument/Error|undefined err
 */
 function monadListen (port, callback) {
-    if (!monad) {
+    if (!monad)
         if (monadConfig.APIKey)
             monad = new Remote (monadConfig);
         else
             monad = new substation (monadConfig);
-    if (actionQueue)
-        for (var i=0,j=actionQueue.length; i<j; i++)
-            monad.addAction.apply (monad, actionQueue[i]);
+    for (var i=0,j=actionQueue.length; i<j; i++)
+        monad.addAction.apply (monad, actionQueue[i]);
+    for (var i=0,j=monadQueue.length; i<j; i++)
+        monad[monadQueue[i][0]].apply (monad, monadQueue[i][1]);
     return monad.listen (port, callback);
 }
 
@@ -189,14 +229,12 @@ function monadListen (port, callback) {
     @optional
 @argument/substation:Action action
 */
-var actionQueue;
+var actionQueue = [];
+var monadQueue = [];
 function addAction (method, route, action) {
     if (monad)
         return monad.addAction (method, route, action);
-    if (!actionQueue)
-        actionQueue = [ [ method, route, action ] ];
-    else
-        actionQueue.push ([ method, route, action ]);
+    actionQueue.push ([ method, route, action ]);
 }
 
 
@@ -215,6 +253,57 @@ function isActive(){
     return monad.isActive.apply (monad, arguments);
 };
 
+
+// proxy events:EventEmitter methods to underlying submergence
+substation.addListener = function(){
+    if (!monad) {
+        monadQueue.push ('addListener', arguments);
+        return;
+    }
+    monad.addListener.apply (monad, arguments);
+};
+substation.on = function(){
+    if (!monad) {
+        monadQueue.push ('on', arguments);
+        return;
+    }
+    monad.on.apply (monad, arguments);
+};
+substation.once = function(){
+    if (!monad) {
+        monadQueue.push ('once', arguments);
+        return;
+    }
+    monad.once.apply (monad, arguments);
+};
+substation.removeListener = function(){
+    if (!monad) {
+        monadQueue.push ('removeListener', arguments);
+        return;
+    }
+    monad.removeListener.apply (monad, arguments);
+};
+substation.removeAllListeners = function(){
+    if (!monad) {
+        monadQueue.push ('removeAllListeners', arguments);
+        return;
+    }
+    monad.removeAllListeners.apply (monad, arguments);
+};
+substation.setMaxListeners = function(){
+    if (!monad) {
+        monadQueue.push ('setMaxListeners', arguments);
+        return;
+    }
+    monad.setMaxListeners.apply (monad, arguments);
+};
+substation.listeners = function(){
+    if (!monad) {
+        monadQueue.push ('listeners', arguments);
+        return;
+    }
+    monad.listeners.apply (monad, arguments);
+};
 
 module.exports = substation;
 substation.configure = configure;
