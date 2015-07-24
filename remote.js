@@ -66,6 +66,9 @@ Remote.prototype.addAction = function(){
 /**     @member/Function listen
 
 */
+var SERVER_EVENTS = [
+    'userOnline', 'userOffline', 'clientOnline', 'clientOffline', 'peerRequest', 'liveConnection'
+];
 Remote.prototype.listen = function (port, callback) {
     var self = this;
 
@@ -82,6 +85,13 @@ Remote.prototype.listen = function (port, callback) {
             if (err)
                 return self.logger.fatal (err);
             self.server.listen (port, self.router, callback);
+        }
+
+        var localConfig = { events:{} };
+        for (var i=0,j=SERVER_EVENTS.length; i<j; i++) {
+            var event = SERVER_EVENTS[i];
+            if (self.listeners (event).length)
+                localConfig.events[event] = filth.clone (self.config.APIForward);
         }
 
         // we must check the remote configuration and optionally overwrite it
@@ -119,15 +129,13 @@ Remote.prototype.listen = function (port, callback) {
                     if (err)
                         return self.logger.fatal (err);
 
-                    var newConfig = {
-                        actions:    actions.map (function (item) {
-                            var actionDoc = item.export();
-                            actionDoc.forward = filth.clone (self.config.APIForward);
-                            return actionDoc;
-                        })
-                    };
+                    localConfig.actions = actions.map (function (item) {
+                        var actionDoc = item.export();
+                        actionDoc.forward = filth.clone (self.config.APIForward);
+                        return actionDoc;
+                    });
 
-                    if (filth.compare (actions, currentConfig)) {
+                    if (filth.compare (localConfig, currentConfig)) {
                         self.logger.info ('remote configuration matches');
                         return cleanup();
                     }
@@ -145,13 +153,14 @@ Remote.prototype.listen = function (port, callback) {
                       + '?apiKey='
                       + encodeURIComponent (self.config.APIKey)
                       ;
-
+                    var localConfigStr = JSON.stringify (localConfig);
                     var configWriteRequest = http.request ({
                         host:       self.config.APIHost,
                         path:       pathstr,
                         method:     'PUT',
                         headers:    {
-                            Accept:     'application/json'
+                            Accept:             'application/json',
+                            'Content-Length':   Buffer.byteLength (localConfigStr)
                         }
                     }, function (response) {
                         if (response.statusCode == '200') {
@@ -176,7 +185,6 @@ Remote.prototype.listen = function (port, callback) {
                                 return process.exit (1);
                             }
 
-                            console.log ('body', response.statusCode, responseBody);
                             if (response.statusCode == '400')
                                 self.logger.fatal (
                                     'remote service rejected configuration as invalid'
@@ -192,7 +200,7 @@ Remote.prototype.listen = function (port, callback) {
                         self.logger.fatal (err, 'failed to update remote configuration');
                         return process.exit (1);
                     });
-                    configWriteRequest.write (JSON.stringify (newConfig));
+                    configWriteRequest.write (localConfigStr);
                     configWriteRequest.end();
                 });
             });
@@ -237,17 +245,21 @@ Remote.prototype.sendEvent = function (/* user, client, info, callback */) {
     var pathstr =
         '/event?apiKey='
       + encodeURIComponent (this.config.APIKey)
+      + '&domain='
+      + encodeURIComponent (this.config.domain)
       + '&user='
       + encodeURIComponent (user)
       ;
     if (client)
         pathstr += '&client=' + encodeURIComponent (client);
+    var infoStr = JSON.stringify (info);
     var eventRequest = http.request ({
         host:       this.config.APIHost,
         path:       pathstr,
         method:     'POST',
         headers:    {
-            Accept:     'application/json'
+            Accept:             'application/json',
+            'Content-Length':   Buffer.byteLength (infoStr)
         }
     }, function (response) {
         var chunks = [];
@@ -276,14 +288,14 @@ Remote.prototype.sendEvent = function (/* user, client, info, callback */) {
         if (callback)
             callback (err);
     });
-    eventRequest.write (JSON.stringify (info));
+    eventRequest.write (infoStr);
     eventRequest.end();
 };
 
 /**     @member/Function isActive
 
 */
-Remote.prototype.isActive = function (/* user, client, callback */){
+Remote.prototype.isActive = function (/* user, client, callback */) {
     var user, client, callback;
     switch (arguments.length) {
         case 2:
@@ -299,6 +311,8 @@ Remote.prototype.isActive = function (/* user, client, callback */){
     var pathstr =
         '/session?apiKey='
       + encodeURIComponent (this.config.APIKey)
+      + '&domain='
+      + encodeURIComponent (this.config.domain)
       + '&user='
       + encodeURIComponent (user)
       ;
@@ -335,6 +349,5 @@ Remote.prototype.isActive = function (/* user, client, callback */){
         if (callback)
             callback (err);
     });
-    eventRequest.write (JSON.stringify (info));
     eventRequest.end();
 };
