@@ -13,6 +13,33 @@ module.exports = core;
 core.MultimediaStream = MultimediaStream;
 core.getUserMedia = MultimediaStream.getUserMedia;
 
+/**     @property/Function emit
+
+*/
+core.emit = function (eventName) {
+    if (this.listeners (eventName).length)
+        return EventEmitter.prototype.emit.apply (this, arguments);
+    if (Object.hasOwnProperty.call (eventQueue, eventName))
+        eventQueue[eventName].push (arguments);
+    else
+        eventQueue[eventName] = [ arguments ];
+};
+core.on ('newListener', function (event, listener) {
+    if (!Object.hasOwnProperty.call (eventQueue, event))
+        return;
+
+    var queue = eventQueue[event];
+    delete eventQueue[event];
+    var i=0, j=queue.length;
+    process.nextTick (function queueStep(){
+        EventEmitter.emit.apply (core, queue[i]);
+        i++;
+        if (i >= j)
+            return;
+        process.nextTick (queueStep);
+    });
+});
+
 
 /**     @property/Function getServer
 
@@ -40,10 +67,10 @@ core.getServer = getServer;
 */
 function sendEvents (events) {
     console.log ('sendEvents', events, this.isReady);
-    if (!this.isReady) {
-        (this.eventQueue || (this.eventQueue = [])).push.apply (this.eventQueue, events);
-        return;
-    }
+    // if (!this.isReady) {
+    //     (this.eventQueue || (this.eventQueue = [])).push.apply (this.eventQueue, events);
+    //     return;
+    // }
     for (var i=0,j=events.length; i<j; i++)
         core.emit.apply (core, events[i]);
 }
@@ -53,19 +80,21 @@ core.sendEvents = sendEvents;
 /**     @property/Function ready
     Begin firing events. Events will *not* be emitted until this Function is called.
 */
-var eventQueue, isReady = false;
-function ready(){
-    if (!isReady && eventQueue) {
-        var queue = eventQueue;
-        window.setTimeout (function(){
-            for (var i=0,j=queue.length; i<j; i++)
-                queue[i]
-        }, 1);
-        delete eventQueue;
-    }
-    this.isReady = true;
-}
-core.ready = ready;
+var eventQueue = {};
+// var eventQueue;
+// var isReady = false;
+// function ready(){
+//     if (!isReady && eventQueue) {
+//         var queue = eventQueue;
+//         window.setTimeout (function(){
+//             for (var i=0,j=queue.length; i<j; i++)
+//                 queue[i]
+//         }, 1);
+//         delete eventQueue;
+//     }
+//     this.isReady = true;
+// }
+// core.ready = ready;
 
 
 /**     @property/Function inherit
@@ -81,35 +110,12 @@ core.inherit = require ('./browser/inherit');
     @super events.EventEmitter
     Emit events from the `otherTabs` Object in other tabs.
 */
-window.otherTabs = {
-    emitter:            new EventEmitter(),
-    addListener:        function(){
-        this.emitter.addListener.apply (this.emitter, arguments);
-    },
-    on:                 function(){
-        this.emitter.on.apply (this.emitter, arguments);
-    },
-    once:               function(){
-        this.emitter.once.apply (this.emitter, arguments);
-    },
-    removeListener:     function(){
-        this.emitter.removeListener.apply (this.emitter, arguments);
-    },
-    removeAllListeners: function(){
-        this.emitter.removeAllListeners.apply (this.emitter, arguments);
-    },
-    setMaxListeners:    function(){
-        this.emitter.setMaxListeners.apply (this.emitter, arguments);
-    },
-    listeners:          function(){
-        this.emitter.listeners.apply (this.emitter, arguments);
-    },
-    emit:               function(){
-        var info = Array.prototype.slice.call (arguments);
-        window.localStorage.setItem ('__substation_event', JSON.stringify (info));
-    }
+window.otherTabs = new EventEmitter();
+window.otherTabs.emit = function(){
+    var info = Array.prototype.slice.call (arguments);
+    window.localStorage.setItem ('__substation_event', JSON.stringify (info));
 };
 window.addEventListener ('storage', function (event) {
     if (event.key != '__substation_event') return;
-    window.otherTabs.emitter.emit.apply (otherTabs.emitter, JSON.parse (event.newValue));
+    EventEmitter.prototype.emit.apply (otherTabs.emitter, JSON.parse (event.newValue));
 });

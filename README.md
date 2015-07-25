@@ -1,8 +1,7 @@
 
 node-substation
 ===============
-**Warning** This project is still in the early development stage. It is not ready for public
-testing.
+**Warning** This project is currently in alpha testing.
 
 A realtime application gateway, session manager, event router and WebRTC signaling server for
 [Node.js](https://nodejs.org/) and [MongoDB](https://www.mongodb.org/).
@@ -15,85 +14,52 @@ A realtime application gateway, session manager, event router and WebRTC signali
  * passively routes best-effort events to users connected over Socket.io
  * automates WebRTC connections between authenticated users
 
-The state of the art in realtime, and particularly in peer to peer, is that even with the best shims
-easy jobs never are. "Room"-based libraries make lovely tutorials and demos but the leap from these
-barely-functional user experiences to a usable, scalable social application is too complex for
-anyone but the top competitive voip companies to manage.
-
-The goal of `substation` is to bridge that gap by reversing signal flow. A user logged in to your
-application no longer has to ask to be reachable, they are reachable by identity as soon as their
-Socket.io connection becomes active. Connection multiplicity is embraced by shipping events to
-groups of related useragents (usually multiple tabs). Robust WebRTC peer "Links" are provided that
-automatically connect and reconnect new connections to the Link as long as both peers maintain at
-least one connection to the server.
-
-Whether your application is a game server, a social application, a collaborative editing tool, a
-telecom service or something totally novel to Planet Earth, `substation` aims to support your
-signaling requirements, at scale, out of the box.
+This module is used to serve your apps locally behind a reverse proxy, to connect to a [sublayer]
+(https://github.com/shenanigans/node-sublayer) instance, and can be built into your client
+javascript with [browserify](http://browserify.org/).
 
 
-Deployment
-----------
-A MongoDB cluster is required for storing session and live connection metadata. You are under no
-obligation to use MongoDB for any of your application data or otherwise use it for any other
-purpose.
+####Table of Contents
+**[Getting Started](#getting-started)
+ * [On the Server](#on-the-server) locally or with a service layer
+ * [In the Browser](#in-the-browser) and beyond
 
-`substation` runs on [Node.js](https://nodejs.org/) and installs with [npm](https://www.npmjs.com/).
-It is configured and launched from a parent script and does not have a CLI tool. A simple, robust,
-cross-platform way to keep your server running is to launch it with [forever]
-(https://github.com/foreverjs/forever).
-```bash
-npm install --save substation
-npm install -g forever
-forever myApp.js
-```
+**[Actions](#actions)**
+ * [Simple JSON Actions](#simple-json-actions) create a REST or RPC app that speaks JSON
+ * [HTML Templates](#html-templates) automatically render a JSON response to HTML
 
-Like most webapp servers, `substation` must live behind a gateway server for load-balancing. The
-load balancer must be "sticky" - a frequent stream of requests from the same agent must be routed to
-the same service node. This is a requirement of Socket.io. `substation` also currently expects the
-load-balancer to terminate `ssl` connections, as this is generally considered a "best practise" and
-`ssl` termination should probably be done by the most trusted software on your stack. With all love
-for Node, if Node is the most trusted software on your entire stack you are being very
-irresponsible.
+**[Authentication](#authentication)**
+ * [XSS Attack Prevention](#xss-attack-prevention) secure your users against hostile foreign domains
 
-The recommended load balancer for `substation` is [nginx](http://nginx.org/). Your configuration
-should contain something like this:
-```
-upstream myapp {
-    ip_hash;
-    server alfa.myapp.com;
-    server sierra.myapp.com;
-    server hotel.myapp.com;
-}
+**[Server Events](#server-events)**
+ * [User and Client Events](#user-and-client-events) get notified of user online status
+ * [Live Connections](#live-connections) react to each new Socket.io connection
+ * [Peer Requests](#peer-requests) connect users together directly with WebRTC
 
-server {
-    Listen              443 ssl;
-    server_name         myapp.com;
-    ssl_certificate     myapp.com.crt;
-    ssl_certificate_key myapp.com.key;
+**[Deployment](#deployment)
+ * [Remote Service Connector](#remote-service-connector) attach to a remote service layer
+ * [Local Deployment](#local-deployment) run the service layer and app scripts together
 
-    location / {
-        proxy_set_header    X-Real-IP $remote_addr;
-        proxy_set_header    X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header    Host $http_host;
-        proxy_set_header    X-NginX-Proxy true;
-        proxy_http_version  1.1;
-        proxy_set_header    Upgrade $http_upgrade;
-        proxy_set_header    Connection "upgrade";
-        proxy_redirect      off;
-        proxy_pass          http://myapp/;
-    }
-
-    location /static {
-        root                www/myapp;
-    }
-}
-```
+**[Client Library](#client-library)**
+ * [Actions](#actions) call home and any other substation server
+ * [Peer To Peer](#peer-to-peer) call other users directly with WebRTC
 
 
 Getting Started
 ---------------
-The entry point for a simple application might look something like this:
+`substation` is part of the [Node.js](https://nodejs.org/) ecosystem. You will need to install the
+Node runtime and its accompanying `npm` package manager in order to author either server or client
+applications.
+
+
+### On the Server
+`substation` does not provide a keepalive entry point. You must provide your own process upkeep
+mechanism for ensuring that server sessions stay up. For an easy, battle-tested solution, try
+[forever](https://github.com/foreverjs/forever).
+
+Because there is no implied project structure to a `substation` service, there is no CLI tool. You
+must write a small entry script which configures and launches the server. A variety of techniques
+for doing so are supported. Here are some examples:
 ```javascript
 var substation = require ('substation');
 var config = require ('./config');
@@ -106,7 +72,7 @@ var otherServer = substation (config);
 myServer.addAction (
     "GET",
     new RegExp ("/msg/(\\d+)"),
-    require ('./src/message/GET')
+    require ('./lib/message/GET')
 );
 
 // activate a server
@@ -115,14 +81,14 @@ myServer.listen (function (err) {
         console.error (err);
         return process.exit (1);
     }
-    console.log ('server online!');
+    console.log ('myServer online!');
 });
 
 // use the monolith
 substation.addAction (
     "POST",
-    new RegExp ("/msg/(\\d+)"),
-    require ('./src/message/POST')
+    "/msg",
+    require ('./lib/message/POST')
 );
 substation.configure (config);
 substation.listen (function (err) {
@@ -134,22 +100,89 @@ substation.listen (function (err) {
 });
 ```
 
-To get a handle on what `substation.addAction (...` does and what `./src/message/POST.js` might look
-like, read through the next sections.
+The loaded configuration file is not always necessary. `substation` comes preloaded with defaults
+that will match most local deployments. If you are attaching to a remote service layer, your
+configuration must contain at least as much information as this simple example:
+```json
+{
+    "APIKey":       "oHfyCWW5nuPrPJC7kEJoDap1ACZmS9Q1E8sMtUbGALRV",
+    "APIForward":   {
+        "host":         "backend.mydomain.com"
+    }
+}
+```
+
+For more information on all the fun and exciting things you can put in your configuration, see [the
+Deployment section](#deployment) or [view the generated docs]().
 
 
-### Actions
+### In the Browser
+The `substation` module provides vital client utilities when built into a [Browserify]
+(http://browserify.org/) bundle. The best build technique is to require `substation` with the `-r`
+flag to make it importable from the page.
+
+The recommended way to hack on your client code is to use [Gulp](http://gulpjs.com/) to build the
+client on changes. Install Gulp and a few other dependencies like so:
+```shell
+$ sudo npm install -g gulp
+$ npm install gulp-util vinyl-source-stream browserify watchify
+```
+
+The new `gulp` command in your environment is expecting to find a `gulpfile.js` in the working
+directory. Here's a simple example gulpfile:
+```javascript
+var gulp = require('gulp');
+var gutil = require('gulp-util');
+var source = require('vinyl-source-stream');
+var browserify = require('browserify');
+var watchify = require('watchify');
+
+var bundler;
+function bundle(){
+     var stream = bundler
+      .bundle()
+      .on('error', gutil.log.bind (gutil, 'Browserify Error'))
+      .pipe (source('bundle.js'))
+      .pipe (gulp.dest('./static/build/'))
+      ;
+     stream.on ('end', function(){ gutil.log (gutil.colors.cyan ('built client library')); });
+     return stream;
+}
+
+bundler = watchify (browserify({ cache: {}, packageCache: {} }));
+bundler.require ('substation');
+bundler.require ('./client/index.js', { expose:'client' });
+bundler.on ('update', bundle);
+
+gulp.task ('bundle', bundle);
+gulp.task ('default', [ 'bundle' ]);
+```
+
+You may now load this bundle into a page with a normal `<script>` tag. Once loaded you may access
+your module or the `substation` module from the page context at any time. When the server sends an
+Event to this context, it will be emitted from the `substation` module but don't worry about missing
+anything. Events will be queued and asynchronously released when the first listener is attached.
+```javascript
+var substation = require ('substation');
+substation.on ('myEvent', myEventListener);
+```
+
+The `substation` module includes several useful tools and there's a lot more to learn! Head on over
+to [the Client Library section](#client-library) to get started writing client bundles.
+
+
+Actions
+-------
 Actions are similar to the routes in other frameworks, except they are accessible over [Socket.io]
 (http://socket.io/) and automatically select whether to apply a template or just send JSON. If you
-use the [Browserify-enabled](http://browserify.org/) client library to perform an Action you need
-never know what transport was used.
+use the client library to perform an Action you need never know what transport was used.
 ```javascript
 var home = substation.getServer();
 console.log ('using http');
 home.goLive (function (err) {
     console.log ('switched to socket.io');
 });
-home.addAction (
+home.action (
     'PUT',
     '/posts/12345',
     { title:postTitle, content:postBody },
@@ -163,84 +196,153 @@ home.addAction (
 // is not defined
 ```
 
-On the server side, an Action is defined by a handful of configuration options and a reaction
-function.
+
+### Simple JSON Actions
+When JSON is requested or whenever a template is not available, JSON will be served. You can also
+filter the query and body input to your action with a JSON Schema document. The query document is
+always treated as a simple Object containing String properties.
+
 ```javascript
-// templates are expected to be callables
-// EITHER template (contextObj)
-// OR template (contextObj, callback (err, html))
-var template_201 = handlebars.compile (
-    fs.readFileSync (201_filename).toString()
-);
-var template_406 = handlebars.compile (
-    fs.readFileSync (406_filename).toString()
-);
-var template_409 = handlebars.compile (
-    fs.readFileSync (409_filename).toString()
-);
-
-var PostSchema = {
-    properties: {
-        title:      {
-            type:       "string",
-            match:      "\\w",
-            maxLength:  128
-        },
-        content:    {
-            type:       "string",
-            match:      "\\w",
-            maxLength:  20480
-        }
-    }
-});
-
-// create an Action instance
 var substation = require ('substation');
 var NewPost = new substation.Action ({
-    authentication: {
+    // require user to be logged in
+    Authentication: {
         isLoggedIn:     true
     },
-    template:       {
-        201:            template_201,
-        406:            template_406,
-        409:            template_409
-    },
-    bodySchema:     PostSchema
+    // filter the request body
+    bodySchema:     {
+        properties: {
+            title:      {
+                type:       "string",
+                match:      "\\w",
+                maxLength:  128
+            },
+            content:    {
+                type:       "string",
+                match:      "\\w",
+                maxLength:  20480
+            },
+            format:     {
+                type:       "array",
+                items:      {
+                    type:       "array",
+                    items:      [
+                        {
+                            type:   'number',
+                            minimum: 0
+                        },
+                        {
+                            type:   'number',
+                            minimum: 0
+                        },
+                        {
+                            type:   'string',
+                            enum:   [
+                                'b',
+                                'i',
+                                'u',
+                                's'
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    }
 }, function (station, agent, request, reply) {
 
     // save the post
+    var postID = request.params[0];
     // ...
 
-    // events are emitted from the client's
-    // `substation` Object
-    reply.event (
-        'newPost',
-        agent.user,
-        request.params[0]
-    );
-
-    // content is reported as `body` to the
-    // client's request callback
+    // content is reported to the request callback
     reply.content ({
         accepted:   true,
         totalPosts: postCount
     });
 
+    // events are not associated with the request
+    reply.event (
+        'newPost',
+        agent.user,
+        postID
+    );
+
     // close the Action
-    // and select a template
     reply.done (201);
 });
 
 // export the action on the monolith server
 substation.addAction (
     'PUT',
-    /\/post\/(\d+)/,
+    new RegExp ('/post/(\\d+)$')/,
     NewPost
 );
 ```
 
 
-### Authentication
+### HTML Templates
+When HTML is requested, `substation` attempts to select a template to render the reply's `content`
+information into an HTML page. Templates are selected by the status code returned by the Action
+Function. Mapping a template to an empty String sets a default template which is used when the
+status code isn't found. If no template can be selected from the Action's configuration,
+`substation` looks for one in its global configuration.
+```javascript
+var substation = require ('substation');
+substation.configure ({
+    template:   {
+        'mydomain.com': {
+            "":         rootTemplate,
+            404:        rootTemplate_NotFound
+        }
+    }
+});
+var FooAction = new substation.Action ({
+    template:   {
+        200:        fooTemplate,
+        403:        fooTemplate_Banned
+    }
+}, function (station, agent, request, reply) {
+    // get and return a Foo
+});
+substation.addAction (
+    GET,
+    '/foo/',
+    FooAction
+);
+```
+
+The definition of a template is simple: a Function which accepts a context argument and optionally
+a callback, and either returns an HTML String synchronously **or** passes an HTML String
+asynchronously as the second argument of the callback. Most Node.js template libraries already
+produce a suitable rendering Function. The author uses [Handlebars]
+(http://handlebarsjs.com/reference.html#base-compile).
+
+Here's a simplified version of the way `substation` calls your template:
+```javascript
+function renderContext (template, context, callback) {
+    var done = false;
+    try {
+        var html = template (context, function (err, html) {
+            if (done)
+                return;
+            if (err)
+                return callback (err);
+            callback (undefined, html);
+        });
+    } catch (err) {
+        return callback (err);
+    }
+    if (html) {
+        done = true;
+        callback (undefined, html);
+    }
+}
+```
+
+
+Authentication
+--------------
 `substation` features an uncommon dual-layer authentication scheme, intended to accomodate
 origin-specific policies by default. Each unique user ID owns any number of unique client IDs,
 representing the individual devices used to access your application. You *must* have a User *and* a
@@ -256,6 +358,7 @@ var LoginAction = new substation.Action (login);
 function login (station, agent, request, reply) {
     if (agent.isLoggedIn) {
         // this User is already logged in
+        reply.redirect ('/');
         return reply.done();
     }
 
@@ -272,6 +375,7 @@ function login (station, agent, request, reply) {
     function finalize (err) {
         if (err)
             return reply.done (403);
+        reply.redirect ('/');
         reply.done();
     }
 
@@ -285,6 +389,8 @@ The primary purpose of this system is localization: if a user does something on 
 phone, it might be helpful to target later events directly to their phone, even if their desktop at
 home was left open to the same page.
 
+
+### XSS Attack Prevention
 In addition to being a logged in (or not) a user may also be domestic (or not) indicating that their
 viewing context has same-origin permissions for the domain. On the client this is fully transparent:
 every action that can be domestic will be. On the server, a property is set on the Agent.
@@ -298,6 +404,53 @@ function PostAction (station, agent, request, reply) {
     }
 }
 ```
+
+To secure your app against XSS attacks, require the `isDomestic` flag on any Action that can submit
+or edit data on the User's behalf. You should also restrict Agents asking to view information
+critical to the user's account.
+```javascript
+substation.addAction ({
+    Authentication: {
+        isDomestic:     true
+    }
+}, PostAction);
+```
+
+
+Server Events
+-------------
+
+
+### User and Client Events
+
+
+### Live Connections
+
+
+### Peer Requests
+
+
+Deployment
+----------
+
+
+### Remote Service Connector
+
+
+### Local Deployment
+
+
+Client Library
+--------------
+
+
+### Actions
+
+
+### Peer To Peer
+
+
+
 
 
 ### Events
