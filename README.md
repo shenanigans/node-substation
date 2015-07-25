@@ -467,7 +467,7 @@ function login (station, agent, request, reply) {
     friends.forEach (function (friendID) {
         station.sendEvent (
             friendID,
-            { id:agent.user, loggedIn:true }
+            [ 'friendOnline', { id:agent.user, loggedIn:true } ]
         );
     });
 }
