@@ -20,7 +20,7 @@ javascript with [browserify](http://browserify.org/).
 
 
 ####Table of Contents
-**[Getting Started](#getting-started)
+**[Getting Started](#getting-started)**
  * [On the Server](#on-the-server) locally or with a service layer
  * [In the Browser](#in-the-browser) and beyond
 
@@ -36,7 +36,7 @@ javascript with [browserify](http://browserify.org/).
  * [Live Connections](#live-connections) react to each new Socket.io connection
  * [Peer Requests](#peer-requests) connect users together directly with WebRTC
 
-**[Deployment](#deployment)
+**[Deployment](#deployment)**
  * [Remote Service Connector](#remote-service-connector) attach to a remote service layer
  * [Local Deployment](#local-deployment) run the service layer and app scripts together
 
