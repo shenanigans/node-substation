@@ -35,6 +35,7 @@ javascript with [browserify](http://browserify.org/).
  * [User and Client Events](#user-and-client-events) get notified of user online status
  * [Live Connections](#live-connections) react to each new Socket.io connection
  * [Peer Requests](#peer-requests) connect users together directly with WebRTC
+ * [Sending Events to Clients](#sending-events-to-clients)
 
 **[Deployment](#deployment)**
  * [Remote Service Connector](#remote-service-connector) attach to a remote service layer
@@ -419,10 +420,22 @@ substation.addAction ({
 
 Server Events
 -------------
-
+`substation` provides several global events for managing your users in detail. These events are
+guaranteed to occur only once, on only one `substation` instance in your cluster. When subscribing
+to server events from a remote service layer, only events which have a listener will be forwarded.
 
 ### User and Client Events
-
+Whenever a Client session opens its first Socket.io session or closes its last session, the
+`clientOnline` or `clientOffline` event is emitted. When the first or last Client belonging to a
+User goes on or off line, the `userOnline` or `userOffline` event is emitted.
+```
+substation.on ('clientOnline', function (domain, user, client) {
+    // react to individual client devices
+});
+substation.on ('userOnline', function (domain, user) {
+    // react to the user's overall status
+});
+```
 
 ### Live Connections
 
