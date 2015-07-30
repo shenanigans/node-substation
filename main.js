@@ -4,8 +4,11 @@ var fs           = require ('fs');
 var path         = require ('path');
 var EventEmitter = require ('events').EventEmitter;
 var async        = require ('async');
-var submergence  = require ('submergence');
 var filth        = require ('filth');
+
+var submergence  = require ('submergence');
+var Reply = submergence.Reply;
+
 var Remote       = require ('./remote');
 var Router       = require ('./lib/Router');
 var Action       = require ('./lib/Action');
@@ -157,6 +160,42 @@ substation.prototype.isActive = function (/* user, client, callback */) {
             process.nextTick (function(){ callback (err); });
     }
 };
+
+
+/**     @member/Function action
+    Trigger an [Action](substation:Action) in JSON mode and get the resulting content and events,
+    or a [stream](stream:Readable) if the Action produces one. Any manually-produced html is
+    ignored.
+
+    There is no method to run an [Action](substation:Action) in HTML mode because an Action's
+    template should generate a complete page.
+@argument/submergence:Agent
+@argument/substation:Action
+@argument/submergence:Request
+@callback
+    @argument/Error|undefined err
+    @argument/String status
+    @argument/Object|stream:Readable content
+        The 'content' value produced by the selected Action.
+    @argument/Array[Array] events
+    @argument/Number length
+        @optional
+        If a Stream was returned, its length will be passed.
+    @argument/String type
+        @optional
+        If a Stream was returned and a type was defined, it will be passed.
+*/
+substation.prototype.action = function (agent, action, request, callback) {
+    this.router.getActionByName (action, function (err, action) {
+        if (err) return callback (err);
+        var reply = new Reply (function (status, events, content, html) {
+            callback (undefined, status, content, events);
+        }, function (status, stream, length, type) {
+            callback (undefined, status, stream, events, length, type);
+        });
+    });
+};
+
 
 // proxy events:EventEmitter methods to underlying submergence
 substation.prototype.addListener = function(){
