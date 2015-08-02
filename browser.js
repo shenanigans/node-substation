@@ -4,14 +4,28 @@ var MultimediaStream = require ('./browser/MultimediaStream');
 var EventEmitter = require ('events').EventEmitter;
 var url = require ('url');
 
+var eventQueue = {};
+
+
 /**     @module substation
     @super EventEmitter
     Realtime application gateway and authentication provider.
 */
+var servers = {};
 var core = new EventEmitter();
 module.exports = core;
 core.MultimediaStream = MultimediaStream;
 core.getUserMedia = MultimediaStream.getUserMedia;
+
+
+/**     @property/Function inherit
+    There are two big issues with `util.inherits`: It won't work with IE <9 and you have to bundle
+    the entire `util` package to get it. This version works around both issues.
+@argument/Function child
+@argument/Function parent
+*/
+core.inherit = require ('./browser/inherit');
+
 
 /**     @property/Function emit
 
@@ -46,7 +60,6 @@ core.on ('newListener', function (event, listener) {
 @argument/String path
 @returns/substation.Server server
 */
-var servers = {};
 function getServer (path, options) {
     var host = path ? url.parse (path) : window.location;
     if (!host) throw new Error ('invalid url');
@@ -66,44 +79,10 @@ core.getServer = getServer;
     exists.
 */
 function sendEvents (events) {
-    console.log ('sendEvents', events, this.isReady);
-    // if (!this.isReady) {
-    //     (this.eventQueue || (this.eventQueue = [])).push.apply (this.eventQueue, events);
-    //     return;
-    // }
     for (var i=0,j=events.length; i<j; i++)
         core.emit.apply (core, events[i]);
 }
 core.sendEvents = sendEvents;
-
-
-/**     @property/Function ready
-    Begin firing events. Events will *not* be emitted until this Function is called.
-*/
-var eventQueue = {};
-// var eventQueue;
-// var isReady = false;
-// function ready(){
-//     if (!isReady && eventQueue) {
-//         var queue = eventQueue;
-//         window.setTimeout (function(){
-//             for (var i=0,j=queue.length; i<j; i++)
-//                 queue[i]
-//         }, 1);
-//         delete eventQueue;
-//     }
-//     this.isReady = true;
-// }
-// core.ready = ready;
-
-
-/**     @property/Function inherit
-    There are two big issues with `util.inherits`: It won't work with IE <9 and you have to bundle
-    the entire `util` package to get it. This version works around both issues.
-@argument/Function child
-@argument/Function parent
-*/
-core.inherit = require ('./browser/inherit');
 
 
 /**     @property/events.EventEmitter otherTabs

@@ -454,11 +454,13 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
             callback = arguments[4];
     }
 
+    console.log ('action', method, path);
+
     // can we make a live transaction?
     if (this.liveSocketReady) {
         var action = {
             method:     method || 'GET',
-            path:       path
+            url:        path
         };
         if (query)
             action.query = query;
@@ -471,6 +473,7 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
             }
             action.body = body;
         }
+        console.log (action);
         if (callback) {
             var id = this.nextActionID++;
             action._id = id;
@@ -582,6 +585,129 @@ Server.prototype.action = function (/* method, path, query, body, callback */) {
     if (body)
         request.write (body);
     request.end();
+}
+
+
+/**     @member/Function commitAction
+    Perform a GET or POST Action by navigation. Note that the only way to pass a body is to create a
+    `form` Element and submit it, so if you are not passing a form your `body` must be a simple flat
+    map Object containing only String values.
+@signature (path)
+@signature (path, Element body)
+@signature (path, query)
+@signature (method, path)
+@signature (method, path, Element body)
+@signature (path, query, Element body)
+@signature (path, query, body)
+@signature (method, path, query)
+@signature (method, path, query, body)
+@argument/String method
+    @default `"GET"`
+    @optional
+@argument/String path
+@argument/Object|undefined query
+    @optional
+@argument/Object|Element body
+    @optional
+*/
+Server.prototype.commitAction = function (/* method, path, query, body */) {
+    var method, path, query, body;
+    switch (arguments.length) {
+        case 1:
+            path = arguments[0];
+            break;
+        case 2:
+            if (arguments[1] instanceof Element) {
+                path = arguments[0];
+                body = arguments[1];
+            } else if (typeof arguments[1] == 'object') {
+                path = arguments[0];
+                query = arguments[1];
+            } else {
+                method = arguments[0];
+                path = arguments[1];
+            }
+            break;
+        case 3:
+            if (arguments[2] instanceof Element) {
+                body = arguments[2];
+                if (typeof arguments[1] == 'object') {
+                    path = arguments[0];
+                    query = arguments[1];
+                } else {
+                    method = arguments[0];
+                    path = arguments[1];
+                }
+            } else if (!arguments[1] || typeof arguments[1] == 'object') {
+                path = arguments[0];
+                query = arguments[1];
+                body = arguments[2];
+            } else {
+                method = arguments[0];
+                path = arguments[1];
+                query = arguments[2];
+            }
+            break;
+        default:
+            method = arguments[0];
+            path = arguments[1];
+            query = arguments[2];
+            body = arguments[3];
+    }
+
+    if (!method)
+        method = 'GET';
+    method = method.toUpperCase();
+    if (method != 'GET' && method != 'POST')
+        throw new Error ('can only commit GET and POST actions');
+    if (path.indexOf ('?') >= 0)
+        throw new Error ('cannot accept paths with GET params already inlined: '+path);
+
+    if (!body)
+        body = window.document.createElement ('form');
+    else if (!(body instanceof Element)) {
+        // create a new form from the body Object
+        var newBody = window.document.createElement ('form');
+        for (var key in body) {
+            var newInput = window.document.createElement ('input');
+            newInput.setAttribute ('type', 'text');
+            newInput.setAttribute ('name', key);
+            newInput.value = body[key];
+            newBody.appendChild (newInput);
+        }
+    }
+
+    body.setAttribute ('method', method);
+    var pathstr = path;
+    if (this.isDomestic) {
+        if (!query)
+            pathstr += '?_domestic='+encodeURIComponent (this.domestic);
+        else
+            pathstr += '?'
+              + Object.keys (query)
+                 .map (function (key) { return
+                        encodeURIComponent (key)
+                      + '='
+                      + encodeURIComponent (query[key])
+                      ;
+                 }).join ('&')
+              + '&_domestic='
+              + encodeURIComponent (this.domestic)
+              ;
+
+    } else if (query)
+        pathstr += '?'
+          + Object.keys (query)
+             .map (function (key) { return
+                    encodeURIComponent (key)
+                  + '='
+                  + encodeURIComponent (query[key])
+                  ;
+             }).join ('&')
+             ;
+    body.setAttribute ('action', pathstr);
+
+    body.submit();
 }
 
 
