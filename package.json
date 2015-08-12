@@ -1,6 +1,6 @@
 {
   "name": "substation",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Realtime application gateway and authentication provider.",
   "keywords": [
     "webapp",

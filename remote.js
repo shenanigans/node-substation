@@ -21,16 +21,14 @@ var standalone =
 
 
 /**     @module/class substation:Remote
-    @super events.EventEmitter
-    Realtime application gateway and authentication provider. You may either instantiate or use this
-    module as a monad.
-@argument/.Configuration config
+    @super submergence
+    Instantiate a `Remote` to connect to a [submergence]() service layer hosted on another cluster.
+    If you use the normal [substation]() module as a monad and your config includes the [APIKey]
+    (:Configuration#APIKey) and [APIForward]((:Configuration#APIForward) keys you will get a
+    `Remote` automatically.
+@argument/substation:Configuration config
 @returns/substation:Remote
     If the `new` keyword is not used, an instance is created and returned.
-@event userOnline
-@event clientOnline
-@event userOffline
-@event clientOffline
 */
 function Remote (config) {
     if (!(this instanceof Remote))
@@ -56,15 +54,30 @@ function Remote (config) {
 util.inherits (Remote, EventEmitter);
 module.exports = Remote;
 
-/**     @member/Function addAction
 
-*/
 Remote.prototype.addAction = function(){
     return this.router.addAction.apply (this.router, arguments);
 };
 
-/**     @member/Function listen
 
+/**     @member/Function listen
+    Reads the remote configuration and compares it to the local instance. If the remote
+    configuration does not match, the `Remote` will do one of the following:
+     * By default, the process will exit.
+     * If the [APIOverwriteActions](:Configuration#APIOverwriteActions) option is set, the local
+        configuration is written to the server. If this fails for some reason, the process will
+        exit.
+     * If the [APIAcceptConfig](:Configuration#APIAcceptConfig) option is set, the discrepency is
+        logged but startup continues.
+
+    Once the remote configuration is resolved, [actions](substation:Action) have their [setup]
+    (substation:Action:Configuration#setup) Functions run. Finally, the port is opened and  this
+    `Remote` begins accepting requests.
+@argument/Number port
+    The port number to listen on.
+@callback
+    The server is now accepting requests. If something prevents this, the process will exit with
+    status code `1`.
 */
 var SERVER_EVENTS = [
     'userOnline', 'userOffline', 'clientOnline', 'clientOffline', 'peerRequest', 'liveConnection'
@@ -187,12 +200,19 @@ Remote.prototype.listen = function (port, callback) {
 
                             if (response.statusCode == '400')
                                 self.logger.fatal (
+                                    responseBody,
                                     'remote service rejected configuration as invalid'
                                 );
                             else if (response.statusCode == '403')
-                                self.logger.fatal ('remote service rejected the APIKey');
+                                self.logger.fatal (
+                                    responseBody,
+                                    'remote service rejected the APIKey'
+                                );
                             else
-                                self.logger.fatal ('unknown remote service error');
+                                self.logger.fatal (
+                                    responseBody,
+                                    'unknown remote service error'
+                                );
                             return process.exit (1);
                         });
                     });
@@ -215,8 +235,32 @@ Remote.prototype.listen = function (port, callback) {
     });
 };
 
-/**     @member/Function sendEvent
 
+/**     @member/Function sendEvent
+    Send an event to a User or User/Client pair with at least one active `Socket.io` connection.
+    These are best-effort events - delivery will not be ensured, just attempted. Messages with
+    ensured delivery must be handled in the application. Guaranteed delivery like `substation` could
+    provide is of limited value because it only guarantees that the message arrived, not that it was
+    successfully acted upon.
+
+    Makes an http `POST` request against the remote service on the path `/event`.
+@argument/String user
+    Send events to connections with this User ID.
+@argument/String client
+    @optional
+    If present, narrows the User ID selection to this specific User/Client pair.
+@argument/Array info
+    The argument parameters as they will appear on the client, beginning with the String name of the
+    event to emit.
+@callback
+    @optional
+    @argument/Error|undefined err
+        If a technical Error prevented the attempt for proceeding, it is passed here.
+    @argument/Boolean didReceive
+        Whether a client is expected to receive the event. This result value is produced early,
+        after connections have been found but before any data has been sent. It is possible, though
+        unlikely, that one of the selected connections will go offline in the next fistfull of
+        milliseconds, resulting in a `true` for `didReceive` when no events were in fact delivered.
 */
 Remote.prototype.sendEvent = function (/* user, client, info, callback */) {
     var user, client, info, callback;
@@ -292,8 +336,20 @@ Remote.prototype.sendEvent = function (/* user, client, info, callback */) {
     eventRequest.end();
 };
 
-/**     @member/Function isActive
 
+/**     @member/Function isActive
+    Check for an active `Socket.io` connection belonging to a User or User/Client pair. Makes an
+    http `GET` request against the remote service on the path `/session`.
+@argument/String user
+    The user to look for.
+@argument/String client
+    @optional
+    Only include connections belonging to this specific client.
+@callback
+    @argument/Error|undefined
+        If a technical Error prevented the attempt for proceeding, it is passed here.
+    @argument/Boolean isActive
+        Whether one or more connections exist for the named User or User/Client pair.
 */
 Remote.prototype.isActive = function (/* user, client, callback */) {
     var user, client, callback;
