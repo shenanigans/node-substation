@@ -4,19 +4,20 @@ node-substation
 **Warning** This project is currently in alpha testing.
 
 A realtime application gateway, session manager, event router and WebRTC signaling server for
-[Node.js](https://nodejs.org/) and [MongoDB](https://www.mongodb.org/).
+[Node.js](https://nodejs.org/) and optionally a 100% local deployment with [MongoDB]
+(https://www.mongodb.org/). `substation` aims to provide:
  * scalable deployment out of the box
- * manages database-backed sessions and browser cookies
- * provides robust XSS-attack protection
- * obfuscates [Socket.io](http://socket.io/) over your REST api
- * validates requests with JSON Schema
- * exposes your api and schema with automatic OPTIONS support
- * passively routes best-effort events to users connected over Socket.io
- * automates WebRTC connections between authenticated users
+ * database-backed sessions and browser cookies
+ * robust XSS-attack protection
+ * [Socket.io](http://socket.io/) over your existing REST or RPC api
+ * request validation with JSON Schema
+ * api and schema publication with automatic OPTIONS support
+ * best-effort asynchronous events routed to users connected over Socket.io
+ * WebRTC connection automation between authenticated users
 
-This module is used to serve your apps locally behind a reverse proxy, to connect to a [sublayer]
-(https://github.com/shenanigans/node-sublayer) instance, and can be built into your client
-javascript with [browserify](http://browserify.org/).
+This module is used to to connect to a [sublayer](https://github.com/shenanigans/node-sublayer)
+instance or serve your apps locally behind a reverse proxy. It can be built directly into your
+client javascript with [browserify](http://browserify.org/).
 
 
 ####Table of Contents
@@ -438,9 +439,60 @@ substation.on ('userOnline', function (domain, user) {
 ```
 
 ### Live Connections
+Each time a new Socket.io connection comes onlilne, the `liveConnection` event is emitted once. This
+event provides you with an immediate opportunity to emit events on the specific client that just
+connected. Because there is no callback on the client waiting for this reply you can only emit
+events, not send reply content.
+```javascript
+substation.on ('liveConnection', function (agent, reply) {
+    usersCollection.findOne (
+        { _id:agent.user },
+        function (err, user) {
+            var online = [];
+            async.each (user.friends, function (friend, callback) {
+                substation.isActive (friend, function (err, isActive) {
+                    if (isActive)
+                        online.push (friend);
+                    callback();
+                });
+            }, function (err) {
+                for (var i = 0; i < online.length; i++)
+                    reply.event ('online', online[i]);
+                reply.done();
+            });
+        }
+    );
+});
+```
 
 
 ### Peer Requests
+When one user requests to connect to another, a `peerRequest` event is emitted. The event describes
+the query used to select the target user or user/client pair and provides the opportunity to permit
+or deny the connection. When the connection is permitted, the server provides the receiving peer
+with a query describing the initiating peer.
+```javascript
+substation.on (
+    'peerRequest',
+    function (agent, info, connect) {
+
+        // find the "friend" User and authenticate
+        // ...
+
+        connect (
+            friend.userID,
+            // connect client to client
+            friend.clientID,
+            // tell "friend" who "agent" is
+            { email:agent.info.email },
+            function (err, sent) {
+                // if a message went out
+                // `sent` will be `true`
+            }
+        );
+    }
+);
+```
 
 
 Deployment
@@ -461,7 +513,44 @@ Client Library
 
 
 ### Peer To Peer
+WebRTC connections are made semi-automatically. The request is initialized by the client machine and
+produces an event on the server. Listeners on this event may allow the connection to proceed, after
+which remaining SDP and ICE exchange phases are automatic. The "Link" created between two Users or
+Clients will remain active for as long as at least one connection *to the server* remains active
+from each peer. As long as the Link is active, newly active connections (e.g. the user opens a new
+tab) will automatically join the Link by creating WebRTC connections and DataChannels to every other
+remote peer.
 
+Multimedia stream handling has been massively streamlined, with renegotiation of the underlying
+connection handled automatically. Streams can be added to or removed from a peer connection at any
+time without disruption. Multimedia streams will be duplicated to every connected Peer on the Link,
+so multimedia applications should consider selecting Peers by Client and disabling streams when not
+in use. Remember that if no Elements on the page refer to the stream no packets will be sent,
+however calling `pause()` is not sufficient.
+
+Native WebRTC stream re-negotiation destroys the underlying streams. `substation` will attempt to
+swap the replacement stream into any `<audio` and `<video>` elements on the page and the stream
+should not emit the `close` event. If you are reading a stream directly, listen to the `swap` event
+to receive the new native stream instance.
+
+On the client:
+```javascript
+// get our home server
+var server = substation.getServer();
+// get and connect a peer
+var peer = server.getPeer (
+    { email:'name@url.tld' }
+);
+peer.connect (function (err) {
+    if (err) {
+        console.log ('peer connection failed', err);
+        return;
+    }
+    console.log ('peer connection succeeded');
+    // emit an event on the remote client
+    peer.emit ('connected', { id:'12345' });
+});
+```
 
 
 
@@ -518,73 +607,6 @@ A small note: if you were smashing "refresh" on your test application and now yo
 appear to be stuck online, wait ten seconds for Socket.io connections which failed in the
 polling/upgrade phase to timeout.
 
-
-### WebRTC
-WebRTC connections are made semi-automatically. The request is initialized by the client machine and
-produces an event on the server. Listeners on this event may allow the connection to proceed, after
-which remaining SDP and ICE exchange phases are automatic. The "Link" created between two Users or
-Clients will remain active for as long as at least one connection *to the server* remains active
-from each peer. As long as the Link is active, newly active connections (e.g. the user opens a new
-tab) will automatically join the Link by creating WebRTC connections and DataChannels to every other
-remote peer.
-
-Multimedia stream handling has been massively streamlined, with renegotiation of the underlying
-connection handled automatically. Streams can be added to or removed from a peer connection at any
-time without disruption. Multimedia streams will be duplicated to every connected Peer on the Link,
-so multimedia applications should consider selecting Peers by Client and disabling streams when not
-in use. Remember that if no Elements on the page refer to the stream no packets will be sent,
-however calling `pause()` is not sufficient.
-
-Due to the insanity that is WebRTC, Some stream renegotiation phases would normally disrupt your
-existing streams, replacing them with duplicates. In these cases, `substation` will attempt to swap
-the replacement stream into any `<video>` elements on the page and the stream should not emit the
-`close` event. Unfortunately, the "unique id" set to incoming streams in most browsers today is
-always "default" which complicates multiplexing somewhat. If you wish to use multiple streams per
-client, they must be **either** differentiable by introspection, i.e. one audio one video, different
-bitrates, etc. **or** only add or remove all streams simultaneously.
-
-On the client:
-```javascript
-// get our home server
-var server = substation.getServer();
-// get and connect a peer
-var peer = server.getPeer (
-    { email:'name@url.tld' }
-);
-peer.connect (function (err) {
-    if (err) {
-        console.log ('peer connection failed', err);
-        return;
-    }
-    console.log ('peer connection succeeded');
-    // emit an event on the remote client
-    peer.emit ('connected', { id:'12345' });
-});
-```
-
-On the server:
-```javascript
-substation.on (
-    'peerRequest',
-    function (agent, info, connect) {
-
-        // find the "friend" User and authenticate
-        // ...
-
-        connect (
-            friend.userID,
-            // connect client to client
-            friend.clientID,
-            // tell "friend" who "agent" is
-            { email:agent.info.email },
-            function (err, sent) {
-                // if a message went out
-                // `sent` will be `true`
-            }
-        );
-    }
-);
-```
 
 
 LICENSE
